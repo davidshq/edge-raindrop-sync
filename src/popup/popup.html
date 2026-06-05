@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Edge → Raindrop Sync</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>Edge → Raindrop</h1>
+    <div id="halt" class="banner hidden"></div>
+    <p class="status">
+      Pending: <strong id="pending">0</strong><br />
+      <span id="lastActivity" class="muted">—</span>
+    </p>
+    <div class="actions">
+      <button id="backfill" type="button">Run backfill</button>
+      <button id="options" type="button" class="secondary">Settings</button>
+    </div>
+    <p id="msg" class="muted"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

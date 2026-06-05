@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Edge → Raindrop Sync — Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Edge → Raindrop Sync</h1>
+      <p class="lede">
+        New Edge bookmarks are copied to Raindrop.io as you create them, mirroring
+        your folder shape. Choose per-folder whether items are deleted locally,
+        kept, or skipped.
+      </p>
+
+      <section>
+        <h2>Settings</h2>
+        <label>
+          Raindrop test token
+          <input id="token" type="password" autocomplete="off" placeholder="paste token" />
+          <button id="testToken" type="button" class="secondary">Test</button>
+          <span id="tokenStatus" class="hint"></span>
+        </label>
+        <label>
+          Root collection name
+          <input id="rootName" type="text" placeholder="Edge" />
+        </label>
+        <label>
+          Global default policy
+          <select id="defaultPolicy">
+            <option value="sync-and-delete">Sync &amp; delete locally (default)</option>
+            <option value="sync-and-keep">Sync &amp; keep locally</option>
+            <option value="exclude">Exclude (don't sync)</option>
+          </select>
+        </label>
+        <label class="checkbox">
+          <input id="pruneEmpty" type="checkbox" />
+          Prune empty folders in Edge after their bookmarks are deleted
+        </label>
+        <div class="row">
+          <button id="save" type="button">Save settings</button>
+          <span id="saveStatus" class="hint"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Status</h2>
+        <div id="haltBanner" class="banner hidden"></div>
+        <p class="status-line">
+          Pending in queue: <strong id="pending">0</strong> ·
+          Last activity: <span id="lastActivity">—</span>
+        </p>
+        <div class="row">
+          <button id="backfill" type="button">Run backfill now</button>
+          <span id="backfillStatus" class="hint"></span>
+        </div>
+        <h3>Recent activity</h3>
+        <ul id="log" class="log"></ul>
+      </section>
+
+      <section>
+        <h2>Folder policies</h2>
+        <p class="hint">
+          Set an explicit policy on a folder to override the default for it and
+          everything beneath it (nearest folder wins). Overrides survive renames.
+        </p>
+        <div id="tree" class="tree"></div>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
