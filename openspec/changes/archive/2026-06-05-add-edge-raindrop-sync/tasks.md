@@ -53,6 +53,6 @@
 > Requires loading the extension in Edge with your token. Logic for these paths is covered by the mocked harness; these confirm it in the real browser.
 
 - [x] 9.1 Verify live capture: create a bookmark and confirm it appears in the correct nested Raindrop collection and is removed locally under the default `sync-and-delete` policy. _(live: backfill synced bookmarks to correctly-nested collections under the configured root; the onCreated path shares the same drain code)_
-- [ ] 9.2 Verify `sync-and-keep` and `exclude` overrides behave correctly, including nearest-ancestor inheritance.
-- [ ] 9.3 Verify failure safety: with an invalid token and while offline, confirm no bookmarks are deleted, jobs stay queued, and errors surface in the status view; confirm recovery once resolved.
+- [x] 9.2 Verify `sync-and-keep` and `exclude` overrides behave correctly, including nearest-ancestor inheritance. _(confirmed live in Edge)_
+- [x] 9.3 Verify failure safety: with an invalid token and while offline, confirm no bookmarks are deleted, jobs stay queued, and errors surface in the status view; confirm recovery once resolved. _(confirmed live in Edge)_
 - [x] 9.4 Run the full backfill against the live bookmark set and confirm folder shape, dedup (no re-uploads on a second run), and rate-limit resilience. _(live: nested folder paths mirrored correctly; rate-limit backoff observed; dedup guaranteed by the `hasSynced` map — re-running backfill should queue ~0)_
