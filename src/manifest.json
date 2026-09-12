@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Edge → Raindrop Sync",
-  "version": "0.0.1",
-  "description": "One-way sync of Microsoft Edge bookmarks to Raindrop.io, captured as you create them.",
+  "version": "0.1.0",
+  "description": "Sync Microsoft Edge bookmarks with Raindrop.io (one-way or bidirectional), captured as you create them.",
   "permissions": ["bookmarks", "storage", "alarms"],
   "host_permissions": ["https://api.raindrop.io/*"],
   "background": {

@@ -1,0 +1,14 @@
+{
+  "name": "edge-raindrop-sync",
+  "private": true,
+  "type": "module",
+  "description": "Manifest V3 Edge extension: sync bookmarks with Raindrop.io",
+  "scripts": {
+    "test": "node scripts/verify-bidirectional-logic.mjs && node scripts/verify-checklist.mjs",
+    "test:live": "node scripts/verify-bidirectional-logic.mjs && node scripts/verify-checklist.mjs --live",
+    "spike": "node scripts/spike-raindrop.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define the per-folder sync policies, how a bookmark's effective policy is resolved through the folder tree, and how confirmed syncs drive local deletion and optional empty-folder pruning.
+Define the per-folder sync policies, how a bookmark's effective policy is resolved through the folder tree, how confirmed syncs drive local deletion and optional empty-folder pruning, and how those policies interact with bidirectional sync.
 
 ## Requirements
 
@@ -70,3 +70,31 @@ The system SHALL provide a setting controlling whether Edge folders left empty b
 #### Scenario: Excluded folder is never pruned
 - **WHEN** pruning is enabled and a folder's policy is `exclude`
 - **THEN** that folder is never removed, even if empty
+
+### Requirement: Bidirectional mode and sync-and-delete coexistence
+The per-folder policies `sync-and-delete`, `sync-and-keep`, and `exclude` SHALL remain available when sync mode is `bidirectional`. `sync-and-delete` SHALL continue to mean “after confirmed Edge→Raindrop create, remove the Edge bookmark,” and that removal SHALL NOT be treated as a user delete for Raindrop propagation.
+
+#### Scenario: Sync-and-delete still removes Edge only
+- **WHEN** bidirectional mode is on and a bookmark's effective policy is `sync-and-delete`
+- **AND** its Raindrop create is confirmed
+- **THEN** the Edge bookmark is removed
+- **AND** the Raindrop bookmark remains
+
+#### Scenario: Sync-and-keep retains both sides
+- **WHEN** bidirectional mode is on and a bookmark's effective policy is `sync-and-keep`
+- **AND** its Raindrop create is confirmed
+- **THEN** the Edge bookmark remains
+- **AND** the pair mapping is retained for later delete propagation
+
+### Requirement: Exclude blocks bidirectional effects
+An effective `exclude` policy SHALL prevent upload, Raindrop→Edge ingest into that path, and delete propagation for bookmarks under that folder, in both one-way and bidirectional modes.
+
+#### Scenario: Excluded bookmark not delete-propagated
+- **WHEN** a bookmark under an `exclude` folder is deleted in Edge
+- **THEN** no Raindrop delete is attempted for it even if bidirectional mode is on
+
+#### Scenario: Excluded bookmark kept when Raindrop copy disappears
+- **WHEN** a previously paired bookmark now sits under an effective `exclude` policy
+- **AND** its paired raindrop is absent during reconcile
+- **THEN** the Edge bookmark is left in place
+- **AND** the pair mapping is cleared (and a tombstone recorded) so delete jobs do not retry

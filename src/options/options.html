@@ -9,9 +9,9 @@
     <main>
       <h1>Edge → Raindrop Sync</h1>
       <p class="lede">
-        New Edge bookmarks are copied to Raindrop.io as you create them, mirroring
-        your folder shape. Choose per-folder whether items are deleted locally,
-        kept, or skipped.
+        Sync Edge bookmarks with Raindrop.io, mirroring your folder shape. Choose
+        one-way upload or bidirectional sync, and per-folder whether items are
+        deleted locally, kept, or skipped.
       </p>
 
       <section>
@@ -26,6 +26,20 @@
           Root collection name
           <input id="rootName" type="text" placeholder="Edge" />
         </label>
+        <label>
+          Sync mode
+          <select id="syncMode">
+            <option value="one-way">One-way (Edge → Raindrop)</option>
+            <option value="bidirectional">Bidirectional Sync</option>
+          </select>
+        </label>
+        <p id="bidirectionalWarn" class="banner warn hidden">
+          Bidirectional mode propagates <strong>user</strong> deletes both ways:
+          deleting a bookmark in Edge or Raindrop removes the paired item in the
+          other system. Raindrop-only metadata (tags, notes, highlights) is never
+          overwritten from Edge. Policy “Sync &amp; delete” still removes the Edge
+          copy after upload without deleting Raindrop.
+        </p>
         <label>
           Global default policy
           <select id="defaultPolicy">
@@ -51,8 +65,12 @@
           Pending in queue: <strong id="pending">0</strong> ·
           Last activity: <span id="lastActivity">—</span>
         </p>
+        <p id="reconcileLine" class="status-line muted hidden">
+          Last reconcile: <span id="lastReconcile">—</span>
+        </p>
         <div class="row">
           <button id="backfill" type="button">Run backfill now</button>
+          <button id="reconcile" type="button" class="secondary hidden">Reconcile now</button>
           <span id="backfillStatus" class="hint"></span>
         </div>
         <h3>Recent activity</h3>

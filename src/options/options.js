@@ -1,8 +1,8 @@
 // Options page logic. Reads/writes config and overrides directly (this is an
 // extension page with the same permissions), and messages the service worker
-// for backfill and status so work continues after the page closes.
+// for backfill, reconcile, and status so work continues after the page closes.
 
-import { ALL_POLICIES, POLICY } from "../lib/constants.js";
+import { ALL_POLICIES, POLICY, SYNC_MODE } from "../lib/constants.js";
 import { getConfig, setConfig, getOverrides, setOverride, clearOverride } from "../lib/store.js";
 import { getTree } from "../lib/bookmarks.js";
 import { RaindropClient } from "../lib/raindrop.js";
@@ -17,23 +17,44 @@ const POLICY_LABELS = {
 
 /* ---- settings ---- */
 
+function updateSyncModeUi(mode) {
+  const bi = mode === SYNC_MODE.BIDIRECTIONAL;
+  $("bidirectionalWarn").classList.toggle("hidden", !bi);
+  $("reconcile").classList.toggle("hidden", !bi);
+  $("reconcileLine").classList.toggle("hidden", !bi);
+}
+
 async function loadSettings() {
   const config = await getConfig();
   $("token").value = config.token || "";
   $("rootName").value = config.rootName || "";
+  $("syncMode").value = config.syncMode || SYNC_MODE.ONE_WAY;
   $("defaultPolicy").value = config.defaultPolicy;
   $("pruneEmpty").checked = !!config.pruneEmpty;
+  updateSyncModeUi($("syncMode").value);
 }
 
 async function saveSettings() {
+  const previous = await getConfig();
+  const syncMode = $("syncMode").value;
   await setConfig({
     token: $("token").value.trim(),
     rootName: $("rootName").value.trim() || "Edge",
+    syncMode,
     defaultPolicy: $("defaultPolicy").value,
     pruneEmpty: $("pruneEmpty").checked,
   });
+  updateSyncModeUi(syncMode);
   $("saveStatus").textContent = "Saved.";
   setTimeout(() => ($("saveStatus").textContent = ""), 1500);
+
+  // First switch into bidirectional: kick an immediate reconcile.
+  if (
+    syncMode === SYNC_MODE.BIDIRECTIONAL &&
+    previous.syncMode !== SYNC_MODE.BIDIRECTIONAL
+  ) {
+    runReconcile("Starting initial reconcile…");
+  }
 }
 
 async function testToken() {
@@ -59,13 +80,19 @@ async function refreshStatus() {
   try {
     resp = await chrome.runtime.sendMessage({ type: "getStatus" });
   } catch {
-    return; // worker waking up; try again next tick
+    return;
   }
   if (!resp?.ok) return;
 
   $("pending").textContent = resp.pending ?? 0;
   const last = resp.status?.lastActivityAt;
   $("lastActivity").textContent = last ? new Date(last).toLocaleString() : "—";
+
+  const rec = resp.reconcile?.lastRunAt;
+  $("lastReconcile").textContent = rec ? new Date(rec).toLocaleString() : "—";
+  if (resp.reconcile?.lastError) {
+    $("lastReconcile").textContent += ` (error: ${resp.reconcile.lastError})`;
+  }
 
   const banner = $("haltBanner");
   if (resp.status?.deletionsHalted && resp.status?.lastError) {
@@ -103,6 +130,19 @@ async function runBackfill() {
   refreshStatus();
 }
 
+async function runReconcile(pendingMsg) {
+  $("backfillStatus").textContent = pendingMsg || "Reconciling…";
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: "reconcileNow" });
+    $("backfillStatus").textContent = resp?.ok
+      ? `Reconcile: queued ${resp.enqueued ?? 0} (done=${resp.done}).`
+      : `Failed: ${resp?.error}`;
+  } catch (err) {
+    $("backfillStatus").textContent = `Failed: ${err.message}`;
+  }
+  refreshStatus();
+}
+
 /* ---- folder policy editor ---- */
 
 async function renderTree() {
@@ -113,13 +153,13 @@ async function renderTree() {
   const rows = [];
   const walk = (node, depth, pathSegments) => {
     for (const child of node.children ?? []) {
-      if (child.url) continue; // folders only
+      if (child.url) continue;
       const path = [...pathSegments, child.title];
       rows.push(buildRow(child, depth, path, overrides));
       walk(child, depth + 1, path);
     }
   };
-  for (const root of tree) walk(root, 0, []); // root id "0": children are top roots
+  for (const root of tree) walk(root, 0, []);
 
   if (rows.length === 0) {
     container.textContent = "No folders found.";
@@ -169,6 +209,8 @@ function buildRow(folder, depth, path, overrides) {
 $("save").addEventListener("click", saveSettings);
 $("testToken").addEventListener("click", testToken);
 $("backfill").addEventListener("click", runBackfill);
+$("reconcile").addEventListener("click", () => runReconcile());
+$("syncMode").addEventListener("change", () => updateSyncModeUi($("syncMode").value));
 
 loadSettings();
 renderTree();

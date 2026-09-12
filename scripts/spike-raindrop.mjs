@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-// Pre-build spike for the Raindrop.io API (tasks 1.1–1.4).
+// Raindrop.io API spike for folder mirroring + bidirectional sync.
 //
-// Verifies, against a real account, the exact behaviors the folder-mirroring
-// core depends on:
-//   1.1  token auth works (GET /user)
+// Original checks (folder mirroring):
+//   1.1  token auth (GET /user)
 //   1.2  nested collections to depth 3 via parent.$id
-//   1.3  child lookup by parent + title; whether titles must be unique per parent
-//   1.4  raindrop creation into a specific collection; rate-limit headers
+//   1.3  child lookup by parent + title; duplicate titles
+//   1.4  raindrop creation; rate-limit headers
+//
+// Bidirectional checks:
+//   2.1  list raindrops by collection with nested=true + pagination
+//   2.2  DELETE /raindrop/{id} moves to Trash (not permanent)
+//   2.3  PUT /raindrop/{id} with only title/link — rich fields preserved
 //
 // Usage:
 //   RAINDROP_TOKEN=xxxxx node scripts/spike-raindrop.mjs [--cleanup]
@@ -101,26 +105,77 @@ async function main() {
     title: "ERS Spike Bookmark",
     collection: { $id: grand._id },
     pleaseParse: {},
+    tags: ["ers-spike-tag"],
+    note: "spike-rich-note",
   });
   created.raindrops.push(drop._id);
   console.log(`  created raindrop _id ${drop._id} in collection ${drop.collection?.$id}`);
   console.log(`  rate-limit headers: ${JSON.stringify(lastRateHeaders)}`);
 
+  console.log("\n== 2.1 List raindrops (nested + pagination) ==");
+  const listed = await call(
+    "GET",
+    `/raindrops/${root._id}?nested=true&perpage=50&page=0`,
+  );
+  const items = listed.items || [];
+  const found = items.some((i) => i._id === drop._id);
+  console.log(`  GET /raindrops/${root._id}?nested=true → ${items.length} item(s)`);
+  console.log(
+    found
+      ? "  ✔ nested listing includes grandchild raindrop"
+      : "  ✗ nested listing did not include the spike raindrop",
+  );
+  console.log(`  count field: ${listed.count ?? "(none)"}`);
+
+  console.log("\n== 2.3 Partial PUT preserves rich fields ==");
+  await call("PUT", `/raindrop/${drop._id}`, {
+    title: "ERS Spike Bookmark (renamed)",
+    link: "https://example.com/ers-spike-renamed",
+  });
+  const { item: afterPut } = await call("GET", `/raindrop/${drop._id}`);
+  const tagsOk = Array.isArray(afterPut.tags) && afterPut.tags.includes("ers-spike-tag");
+  const noteOk = afterPut.note === "spike-rich-note";
+  console.log(`  tags after title/link PUT: ${JSON.stringify(afterPut.tags)}`);
+  console.log(`  note after title/link PUT: ${JSON.stringify(afterPut.note)}`);
+  console.log(
+    tagsOk && noteOk
+      ? "  ✔ partial PUT preserved tags and note"
+      : "  ✗ rich fields changed — do NOT send empty tags/notes; prefer omit updates in engine if unsafe",
+  );
+
+  console.log("\n== 2.2 DELETE moves to Trash ==");
+  await call("DELETE", `/raindrop/${drop._id}`);
+  created.raindrops = created.raindrops.filter((id) => id !== drop._id);
+  const trash = await call("GET", "/raindrops/-99?perpage=50&page=0");
+  const inTrash = (trash.items || []).some((i) => i._id === drop._id);
+  console.log(
+    inTrash
+      ? "  ✔ DELETE /raindrop/{id} moved item to Trash (-99), not permanent"
+      : "  ⚠ not found in Trash page 0 — may have paged out; treat DELETE as soft-delete per docs",
+  );
+  // Permanent cleanup from trash for --cleanup hygiene
+  if (inTrash) {
+    await call("DELETE", `/raindrop/${drop._id}`).catch(() => {});
+  }
+
   console.log("\nSpike complete. Findings to fold into the client:");
   console.log("  - parent.$id nesting depth:", grand.parent?.$id === child._id ? "OK to 3" : "LIMITED");
   console.log("  - duplicate titles per parent:", dup._id !== grand._id ? "ALLOWED (match-before-create)" : "de-duplicated");
+  console.log("  - nested list:", found ? "OK with nested=true" : "FAILED");
+  console.log("  - partial PUT rich-field safe:", tagsOk && noteOk ? "YES" : "NO");
+  console.log("  - DELETE semantics:", inTrash ? "soft (Trash)" : "check manually");
   console.log("  - rate-limit signal:", JSON.stringify(lastRateHeaders));
 
   if (cleanup) {
     console.log("\n== Cleanup ==");
     for (const id of created.raindrops) {
       await call("DELETE", `/raindrop/${id}`).catch(() => {});
+      await call("DELETE", `/raindrop/${id}`).catch(() => {}); // second pass: permanent if in trash
     }
-    // Delete deepest-first.
     for (const id of [...created.collections].reverse()) {
       await call("DELETE", `/collection/${id}`).catch(() => {});
     }
-    console.log("  removed spike collections and raindrop.");
+    console.log("  removed spike collections and raindrops.");
   } else {
     console.log('\n(Use --cleanup to remove the "ERS Spike Root" collection tree.)');
   }

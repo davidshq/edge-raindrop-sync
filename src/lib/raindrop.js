@@ -1,8 +1,8 @@
 // Authenticated Raindrop.io REST client.
 //
-// Covers exactly what the sync engine needs: a token check, listing root and
-// nested collections, creating a collection (optionally under a parent), and
-// creating a raindrop in a specific collection.
+// Covers token check, collections, raindrop create/list/update/delete.
+// Edge-owned writes only ever send link/title/collection (plus pleaseParse on
+// create). Never send empty tags/notes — that would clear Raindrop-rich fields.
 //
 // Two error types let the drain react correctly:
 //   AuthError      -> token bad/expired: halt deletions, keep jobs queued.
@@ -44,7 +44,15 @@ export class RaindropClient {
       const text = await res.text().catch(() => "");
       throw new RaindropError(`Raindrop ${method} ${path} failed: ${res.status} ${text}`);
     }
-    return res.json();
+    // DELETE may return an empty body.
+    if (res.status === 204) return {};
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { raw: text };
+    }
   }
 
   #retryAfterMs(res) {
@@ -87,7 +95,8 @@ export class RaindropClient {
   }
 
   // Create a raindrop (bookmark) inside a collection. `pleaseParse` asks
-  // Raindrop to enrich metadata (cover, excerpt) from the link.
+  // Raindrop to enrich metadata (cover, excerpt) from the link. Rich fields
+  // are intentionally omitted so we never clear tags/notes/highlights.
   async createRaindrop({ link, title, collectionId }) {
     const body = {
       link,
@@ -97,5 +106,47 @@ export class RaindropClient {
     };
     const data = await this.request("POST", "/raindrop", body);
     return data.item;
+  }
+
+  /**
+   * List raindrops in a collection (paginated).
+   * @param {number|string} collectionId
+   * @param {{ page?: number, perPage?: number, nested?: boolean }} [opts]
+   */
+  async listRaindrops(collectionId, { page = 0, perPage = 50, nested = false } = {}) {
+    const params = new URLSearchParams({
+      page: String(page),
+      perpage: String(Math.min(perPage, 50)),
+    });
+    if (nested) params.set("nested", "true");
+    const data = await this.request("GET", `/raindrops/${collectionId}?${params}`);
+    return {
+      items: data.items ?? [],
+      count: data.count ?? (data.items?.length ?? 0),
+    };
+  }
+
+  async getRaindrop(id) {
+    const data = await this.request("GET", `/raindrop/${id}`);
+    return data.item;
+  }
+
+  /**
+   * Field-selective update for Edge-owned fields only.
+   * Never pass tags/notes/highlights/cover/excerpt — empty values clear them.
+   */
+  async updateRaindrop(id, { link, title, collectionId } = {}) {
+    const body = {};
+    if (link != null) body.link = link;
+    if (title != null) body.title = title;
+    if (collectionId != null) body.collection = { $id: collectionId };
+    if (Object.keys(body).length === 0) return null;
+    const data = await this.request("PUT", `/raindrop/${id}`, body);
+    return data.item;
+  }
+
+  /** Soft-delete: moves the raindrop to Trash (not permanent). */
+  async deleteRaindrop(id) {
+    await this.request("DELETE", `/raindrop/${id}`);
   }
 }
