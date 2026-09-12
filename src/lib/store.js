@@ -39,6 +39,11 @@ export async function getOverrides() {
   return read(KEY.OVERRIDES, {});
 }
 
+/** Replace the entire overrides map in one write (options Save). */
+export async function setOverrides(overrides) {
+  await write(KEY.OVERRIDES, overrides ?? {});
+}
+
 export async function setOverride(folderId, policy, path) {
   const overrides = await getOverrides();
   overrides[folderId] = { policy, path };

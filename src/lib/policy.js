@@ -14,3 +14,8 @@ export function resolvePolicy(ancestorIds, overrides, defaultPolicy) {
   }
   return defaultPolicy ?? POLICY.SYNC_DELETE;
 }
+
+/** True when effective policy is exclude (upload/ingest/delete blocked both ways). */
+export function isExcluded(ancestorIds, overrides, defaultPolicy) {
+  return resolvePolicy(ancestorIds, overrides, defaultPolicy) === POLICY.EXCLUDE;
+}

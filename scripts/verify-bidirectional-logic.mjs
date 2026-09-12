@@ -5,7 +5,7 @@
 // Or:  npm test
 
 import assert from "node:assert/strict";
-import { resolvePolicy } from "../src/lib/policy.js";
+import { resolvePolicy, isExcluded } from "../src/lib/policy.js";
 import {
   collectionPathFromRoot,
   collectionIdAlive,
@@ -23,6 +23,8 @@ console.log("== policy resolution ==");
   assert.equal(resolvePolicy(["secrets", "work"], overrides, POLICY.SYNC_DELETE), POLICY.EXCLUDE);
   assert.equal(resolvePolicy(["archive", "work"], overrides, POLICY.SYNC_DELETE), POLICY.SYNC_KEEP);
   assert.equal(resolvePolicy(["misc"], overrides, POLICY.SYNC_DELETE), POLICY.SYNC_DELETE);
+  assert.equal(isExcluded(["secrets", "work"], overrides, POLICY.SYNC_DELETE), true);
+  assert.equal(isExcluded(["archive", "work"], overrides, POLICY.SYNC_DELETE), false);
   console.log("  ✔ nearest-ancestor + exclude");
 }
 

@@ -8,8 +8,8 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 
 | Mode | Behavior |
 | --- | --- |
-| **One-way** (default) | Edge → Raindrop only — same as the original extension |
-| **Bidirectional** | Also pulls Raindrop → Edge under your root collection, and propagates **user** deletes both ways |
+| **One-way** (default) | Edge → Raindrop only. Choose whether to **delete from Edge** after upload (offload) or **keep** a local copy. |
+| **Bidirectional** | Keeps bookmarks in **both** places: also pulls Raindrop → Edge under your root, and propagates **user** deletes both ways. Global default is keep-both; use folder policies for Exclude or Offload exceptions. |
 
 ## What it does
 
@@ -18,12 +18,12 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   collections under a root collection you name (default `Edge`), preserving both
   Edge roots (`Favorites bar`, `Other favorites`). Path→id cache hits are checked
   against the live Raindrop collection list each drain.
-- **Per-folder policy** — each folder is `sync-and-delete` (default),
-  `sync-and-keep`, or `exclude`. A folder inherits the nearest ancestor's policy,
-  falling back to your global default.
-- **Instant local delete** — under `sync-and-delete`, the bookmark is removed
-  from Edge the instant Raindrop confirms the copy (never before). In
-  bidirectional mode this **does not** delete the Raindrop copy.
+- **Per-folder policy** — override keep / offload (`sync-and-delete`) / `exclude`
+  on any folder. Nearest ancestor wins; otherwise the global default applies
+  (one-way: your “After upload” choice; bidirectional: keep-both).
+- **Instant local delete** — under offload / `sync-and-delete`, the bookmark is
+  removed from Edge the instant Raindrop confirms the copy (never before). That
+  cleanup **does not** delete the Raindrop copy, including in bidirectional mode.
 - **Bidirectional pull** — when enabled, raindrops under the root appear as Edge
   bookmarks (link/article style items only — uploaded files/documents are skipped);
   deleting on either side removes the pair (with tombstones so items don't
@@ -52,6 +52,8 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    - **Load unpacked** → select the `src/` folder
 4. Open the extension's **Options**, paste your token, click **Test**, set the
    root collection name / sync mode / default policy, then **Save settings**.
+   Folder policy overrides are edited as a draft — use **Save folder policies**
+   when you want them to take effect (including for child folders via inheritance).
 5. (Optional) Click **Run backfill now** to import existing Edge bookmarks.
 6. (Bidirectional) Click **Reconcile now** (or wait for the heartbeat) to pull
    Raindrop items into Edge.
@@ -111,8 +113,10 @@ scripts/
   GUID, so the extension keys pairs and policy overrides on the bookmark node
   `id`, which is stable across restarts and survives renames/moves.
 - **Auth:** uses a personal test token (no OAuth). Single-user, sideloaded.
-- **Deletes in bidirectional mode:** only **user** deletes propagate. Policy
-  `sync-and-delete` still means “remove from Edge after upload” and leaves
-  Raindrop intact (with all rich metadata).
+- **Deletes in bidirectional mode:** only **user** deletes propagate. Folder
+  **Offload** (`sync-and-delete`) still means “remove from Edge after upload”
+  and leaves Raindrop intact (with all rich metadata). The options UI does not
+  offer offload as the bidirectional *global* default — that mode keeps both
+  sides by default.
 - **Out of scope for now:** re-syncing title/URL/moves via `onChanged`/`onMoved`,
   OAuth, and publishing to the Edge Add-ons store.

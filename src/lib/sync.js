@@ -37,8 +37,9 @@ import {
   resolveLocation,
   createBookmark,
   resolveEdgeParentForMirror,
+  ancestorIdsFromFolder,
 } from "./bookmarks.js";
-import { resolvePolicy } from "./policy.js";
+import { resolvePolicy, isExcluded } from "./policy.js";
 import { RaindropClient, AuthError, RateLimitError } from "./raindrop.js";
 import { buildCollectionIndex, ensureCollectionPath } from "./collections.js";
 import { reconcile } from "./reconcile.js";
@@ -299,8 +300,8 @@ async function processDeleteEdge(job, ctx) {
     try {
       const node = await getNode(bookmarkId);
       const parentId = node.parentId;
-      const ancestorIds = await ancestorIdsFromParent(parentId);
-      if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+      const ancestorIds = await ancestorIdsFromFolder(parentId);
+      if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
         await appendLog(
           "info",
           `Skipped Edge delete for excluded bookmark ${bookmarkId} (raindrop ${rid} gone).`,
@@ -344,8 +345,8 @@ export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
   // Prefer parent chain from removeInfo — the bookmark node is already gone.
   if (removeInfo?.parentId) {
     const overrides = await getOverrides();
-    const ancestorIds = await ancestorIdsFromParent(removeInfo.parentId);
-    if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+    const ancestorIds = await ancestorIdsFromFolder(removeInfo.parentId);
+    if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
       await appendLog(
         "info",
         `Skipped Raindrop delete for excluded Edge bookmark ${bookmarkId}.`,
@@ -362,22 +363,6 @@ export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
   });
   await appendLog("info", `Queued Raindrop delete for removed Edge bookmark ${bookmarkId}.`);
   await drain();
-}
-
-/** Walk from a folder id up to (but not including) root "0"; nearest-first. */
-async function ancestorIdsFromParent(parentId) {
-  const ancestorIds = [];
-  let id = parentId;
-  while (id && id !== "0") {
-    ancestorIds.push(id);
-    try {
-      const node = await getNode(id);
-      id = node.parentId;
-    } catch {
-      break;
-    }
-  }
-  return ancestorIds;
 }
 
 /**

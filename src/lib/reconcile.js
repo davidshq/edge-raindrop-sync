@@ -6,7 +6,7 @@
 // tombstones and `exclude` folder policy. Auth/rate-limit errors bubble to the
 // drain so deletions stay halted consistently.
 
-import { POLICY, JOB, SYNC_MODE } from "./constants.js";
+import { JOB, SYNC_MODE } from "./constants.js";
 import {
   getConfig,
   getOverrides,
@@ -18,7 +18,7 @@ import {
   ensurePairsMigrated,
 } from "./store.js";
 import * as queue from "./queue.js";
-import { resolvePolicy } from "./policy.js";
+import { isExcluded } from "./policy.js";
 import { getTopRoots, ancestorIdsForMirrorPath } from "./bookmarks.js";
 import {
   buildCollectionIndex,
@@ -208,5 +208,5 @@ async function pathIsExcluded(relativeSegments, topRoots, overrides, defaultPoli
     rootName,
     topRoots,
   );
-  return resolvePolicy(ancestorIds, overrides, defaultPolicy) === POLICY.EXCLUDE;
+  return isExcluded(ancestorIds, overrides, defaultPolicy);
 }

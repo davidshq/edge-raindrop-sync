@@ -2,7 +2,9 @@
 
 export const RAINDROP_API = "https://api.raindrop.io/rest/v1";
 
-// The three sync policies. `sync-and-delete` is the global default.
+// The three sync policies. `sync-and-delete` (offload) is the one-way global
+// default; bidirectional saves force global `sync-and-keep` and treat offload as
+// a per-folder exception only.
 export const POLICY = {
   SYNC_DELETE: "sync-and-delete",
   SYNC_KEEP: "sync-and-keep",

@@ -31,22 +31,41 @@ The extension SHALL let the user set the name of the root Raindrop collection un
 - **THEN** the Edge tree is mirrored under a collection of that name
 
 ### Requirement: Global default policy configuration
-The extension SHALL let the user choose the global default policy from `sync-and-delete`, `sync-and-keep`, and `exclude`, defaulting to `sync-and-delete`.
+The extension SHALL let the user choose the global default policy from `sync-and-delete`, `sync-and-keep`, and `exclude` when sync mode is `one-way`, defaulting to `sync-and-delete`. When sync mode is `bidirectional`, the options UI SHALL NOT present a global delete-vs-keep choice; saving bidirectional mode SHALL persist the global default as `sync-and-keep` (keep both sides). Per-folder overrides of `sync-and-delete` (offload) and `exclude` SHALL remain available in both modes.
 
-#### Scenario: Change global default
-- **WHEN** the user sets the global default policy to `sync-and-keep`
+#### Scenario: Change global default in one-way
+- **WHEN** sync mode is `one-way` and the user sets the global default policy to `sync-and-keep`
 - **THEN** bookmarks with no ancestor override resolve to `sync-and-keep`
 
+#### Scenario: Bidirectional implies keep-both globally
+- **WHEN** the user selects Bidirectional Sync and saves
+- **THEN** the global default policy is persisted as `sync-and-keep`
+- **AND** the options UI explains that folder policies can still offload or exclude subtrees
+
+#### Scenario: One-way after-upload control hidden in bidirectional
+- **WHEN** sync mode is `bidirectional`
+- **THEN** the options UI does not offer a global “delete from Edge after upload” control
+
 ### Requirement: Per-folder policy editor
-The extension SHALL present the Edge folder tree and let the user assign an explicit policy override to any folder. Overrides SHALL be stored keyed by folder GUID and displayed alongside the folder's path.
+The extension SHALL present the Edge folder tree and let the user assign an explicit policy override to any folder. Edits in the editor SHALL be held as a local draft and SHALL NOT be persisted or take effect for sync until the user explicitly saves. Overrides SHALL be stored keyed by folder GUID and displayed alongside the folder's path. The editor SHALL allow discarding unsaved draft changes.
 
 #### Scenario: Assign an override
-- **WHEN** the user selects a folder in the editor and assigns it `exclude`
+- **WHEN** the user selects a folder in the editor and assigns it `exclude`, then saves
 - **THEN** an override keyed by that folder's GUID is persisted
 - **AND** the folder's path and chosen policy are shown in the editor
 
+#### Scenario: Draft does not apply until save
+- **WHEN** the user changes a folder's policy in the editor but has not saved
+- **THEN** the persisted overrides are unchanged
+- **AND** sync continues to resolve policies from the last saved overrides
+
+#### Scenario: Discard draft
+- **WHEN** the user has unsaved folder-policy edits and discards them
+- **THEN** the editor reverts to the last saved overrides
+- **AND** nothing is written to storage
+
 #### Scenario: Remove an override
-- **WHEN** the user clears a folder's override
+- **WHEN** the user clears a folder's override and saves
 - **THEN** that folder reverts to nearest-ancestor / global-default resolution
 
 ### Requirement: Empty-folder prune toggle
@@ -88,11 +107,12 @@ The extension SHALL let the user choose sync mode from `one-way` and `bidirectio
 - **THEN** the effective mode is `one-way`
 
 ### Requirement: Bidirectional warning and status
-When bidirectional mode is selected, the options UI SHALL present a short warning that user deletes propagate both ways, and the status view SHALL surface reconcile activity (pulls, remote deletes) and related errors.
+When bidirectional mode is selected, the options UI SHALL present a short warning that user deletes propagate both ways, note that the global default is keep-both, and point to folder Offload/Exclude for exceptions. The status view SHALL surface reconcile activity (pulls, remote deletes) and related errors.
 
 #### Scenario: Warning shown
 - **WHEN** the user views sync mode settings and bidirectional is selected or focused
 - **THEN** a warning explains that deleting a bookmark in Edge or Raindrop deletes the paired item in the other system
+- **AND** the UI indicates offload is a per-folder exception, not the global bidirectional default
 
 #### Scenario: Reconcile activity in status
 - **WHEN** bidirectional reconcile pulls or deletes items

@@ -1,27 +1,58 @@
 // Options page logic. Reads/writes config and overrides directly (this is an
 // extension page with the same permissions), and messages the service worker
 // for backfill, reconcile, and status so work continues after the page closes.
+// Folder-policy edits are held in a draft until "Save folder policies" so a
+// parent change cannot surprise-apply to children mid-edit.
 
 import { ALL_POLICIES, POLICY, SYNC_MODE } from "../lib/constants.js";
-import { getConfig, setConfig, getOverrides, setOverride, clearOverride } from "../lib/store.js";
+import { getConfig, setConfig, getOverrides, setOverrides } from "../lib/store.js";
 import { getTree } from "../lib/bookmarks.js";
 import { RaindropClient } from "../lib/raindrop.js";
 
 const $ = (id) => document.getElementById(id);
 
+// Folder-policy labels. "Offload" is sync-and-delete: useful as a per-folder
+// exception under bidirectional, not as the bidirectional global default.
 const POLICY_LABELS = {
-  [POLICY.SYNC_DELETE]: "Sync & delete",
-  [POLICY.SYNC_KEEP]: "Sync & keep",
+  [POLICY.SYNC_DELETE]: "Offload (delete from Edge)",
+  [POLICY.SYNC_KEEP]: "Keep in Edge",
   [POLICY.EXCLUDE]: "Exclude",
 };
 
+/** In-memory draft of folder overrides; only written on Save. */
+let draftOverrides = {};
+/** Last persisted snapshot, used for dirty checks and Discard. */
+let savedOverrides = {};
+let policiesStatusTimer = null;
+/** One-way "After upload" choice restored when leaving bidirectional. */
+let oneWayPolicyMemory = POLICY.SYNC_DELETE;
+
 /* ---- settings ---- */
 
+/**
+ * Bidirectional implies keep-both globally. One-way shows the after-upload
+ * policy control. Folder overrides may still offload or exclude subtrees.
+ */
 function updateSyncModeUi(mode) {
   const bi = mode === SYNC_MODE.BIDIRECTIONAL;
+  $("oneWayModeHelp").classList.toggle("hidden", bi);
+  $("bidirectionalModeHelp").classList.toggle("hidden", !bi);
   $("bidirectionalWarn").classList.toggle("hidden", !bi);
+  $("oneWayPolicyBlock").classList.toggle("hidden", bi);
+  $("bidirectionalPolicyBlock").classList.toggle("hidden", !bi);
   $("reconcile").classList.toggle("hidden", !bi);
   $("reconcileLine").classList.toggle("hidden", !bi);
+
+  if (bi) {
+    $("defaultPolicy").value = POLICY.SYNC_KEEP;
+  } else {
+    $("defaultPolicy").value = oneWayPolicyMemory;
+  }
+}
+
+function effectiveDefaultPolicy(syncMode) {
+  if (syncMode === SYNC_MODE.BIDIRECTIONAL) return POLICY.SYNC_KEEP;
+  return $("defaultPolicy").value;
 }
 
 async function loadSettings() {
@@ -31,17 +62,32 @@ async function loadSettings() {
   $("syncMode").value = config.syncMode || SYNC_MODE.ONE_WAY;
   $("defaultPolicy").value = config.defaultPolicy;
   $("pruneEmpty").checked = !!config.pruneEmpty;
-  updateSyncModeUi($("syncMode").value);
+
+  const mode = $("syncMode").value;
+  if (mode === SYNC_MODE.ONE_WAY) {
+    oneWayPolicyMemory = config.defaultPolicy || POLICY.SYNC_DELETE;
+  } else if (config.defaultPolicy && config.defaultPolicy !== POLICY.SYNC_KEEP) {
+    // Stale global offload under bidirectional: remember it for one-way return,
+    // but UI/save will coerce global default to keep.
+    oneWayPolicyMemory = config.defaultPolicy;
+  } else {
+    oneWayPolicyMemory = POLICY.SYNC_DELETE;
+  }
+  updateSyncModeUi(mode);
 }
 
 async function saveSettings() {
   const previous = await getConfig();
   const syncMode = $("syncMode").value;
+  const defaultPolicy = effectiveDefaultPolicy(syncMode);
+  if (syncMode === SYNC_MODE.ONE_WAY) {
+    oneWayPolicyMemory = defaultPolicy;
+  }
   await setConfig({
     token: $("token").value.trim(),
     rootName: $("rootName").value.trim() || "Edge",
     syncMode,
-    defaultPolicy: $("defaultPolicy").value,
+    defaultPolicy,
     pruneEmpty: $("pruneEmpty").checked,
   });
   updateSyncModeUi(syncMode);
@@ -143,10 +189,67 @@ async function runReconcile(pendingMsg) {
   refreshStatus();
 }
 
-/* ---- folder policy editor ---- */
+/* ---- folder policy editor (draft until Save) ---- */
+
+function cloneOverrides(overrides) {
+  return structuredClone(overrides ?? {});
+}
+
+function overridesEqual(a, b) {
+  const keysA = Object.keys(a).sort();
+  const keysB = Object.keys(b).sort();
+  if (keysA.length !== keysB.length) return false;
+  for (let i = 0; i < keysA.length; i++) {
+    if (keysA[i] !== keysB[i]) return false;
+    const left = a[keysA[i]];
+    const right = b[keysB[i]];
+    if (left?.policy !== right?.policy || left?.path !== right?.path) return false;
+  }
+  return true;
+}
+
+function policiesDirty() {
+  return !overridesEqual(draftOverrides, savedOverrides);
+}
+
+function updatePoliciesUi(statusText) {
+  const dirty = policiesDirty();
+  $("savePolicies").disabled = !dirty;
+  $("discardPolicies").disabled = !dirty;
+  if (statusText !== undefined) {
+    $("policiesStatus").textContent = statusText;
+    return;
+  }
+  $("policiesStatus").textContent = dirty ? "Unsaved changes" : "";
+}
+
+function flashPoliciesStatus(text) {
+  if (policiesStatusTimer) clearTimeout(policiesStatusTimer);
+  updatePoliciesUi(text);
+  policiesStatusTimer = setTimeout(() => {
+    policiesStatusTimer = null;
+    updatePoliciesUi();
+  }, 1500);
+}
+
+function applyDraftChange(folderId, policy, path) {
+  if (policy === "inherit") {
+    delete draftOverrides[folderId];
+  } else {
+    draftOverrides[folderId] = { policy, path };
+  }
+  updatePoliciesUi();
+}
 
 async function renderTree() {
   const [overrides, tree] = await Promise.all([getOverrides(), getTree()]);
+  savedOverrides = cloneOverrides(overrides);
+  draftOverrides = cloneOverrides(overrides);
+  paintTree(tree);
+  updatePoliciesUi();
+}
+
+function paintTree(tree) {
   const container = $("tree");
   container.innerHTML = "";
 
@@ -155,7 +258,7 @@ async function renderTree() {
     for (const child of node.children ?? []) {
       if (child.url) continue;
       const path = [...pathSegments, child.title];
-      rows.push(buildRow(child, depth, path, overrides));
+      rows.push(buildRow(child, depth, path));
       walk(child, depth + 1, path);
     }
   };
@@ -168,10 +271,10 @@ async function renderTree() {
   rows.forEach((r) => container.append(r));
 }
 
-function buildRow(folder, depth, path, overrides) {
+function buildRow(folder, depth, path) {
   const row = document.createElement("div");
   row.className = "tree-row";
-  const current = overrides[folder.id]?.policy;
+  const current = draftOverrides[folder.id]?.policy;
   if (current) row.classList.add("has-override");
 
   const name = document.createElement("div");
@@ -190,18 +293,28 @@ function buildRow(folder, depth, path, overrides) {
   for (const p of ALL_POLICIES) {
     select.append(new Option(POLICY_LABELS[p], p, current === p, current === p));
   }
-  select.addEventListener("change", async () => {
-    if (select.value === "inherit") {
-      await clearOverride(folder.id);
-      row.classList.remove("has-override");
-    } else {
-      await setOverride(folder.id, select.value, path.join(" / "));
-      row.classList.add("has-override");
-    }
+  select.addEventListener("change", () => {
+    applyDraftChange(folder.id, select.value, path.join(" / "));
+    row.classList.toggle("has-override", select.value !== "inherit");
   });
 
   row.append(name, select);
   return row;
+}
+
+async function savePolicies() {
+  if (!policiesDirty()) return;
+  await setOverrides(cloneOverrides(draftOverrides));
+  savedOverrides = cloneOverrides(draftOverrides);
+  flashPoliciesStatus("Saved.");
+}
+
+async function discardPolicies() {
+  if (!policiesDirty()) return;
+  draftOverrides = cloneOverrides(savedOverrides);
+  const tree = await getTree();
+  paintTree(tree);
+  updatePoliciesUi();
 }
 
 /* ---- wire up ---- */
@@ -210,7 +323,25 @@ $("save").addEventListener("click", saveSettings);
 $("testToken").addEventListener("click", testToken);
 $("backfill").addEventListener("click", runBackfill);
 $("reconcile").addEventListener("click", () => runReconcile());
-$("syncMode").addEventListener("change", () => updateSyncModeUi($("syncMode").value));
+$("syncMode").addEventListener("change", () => {
+  const mode = $("syncMode").value;
+  if (mode === SYNC_MODE.BIDIRECTIONAL) {
+    oneWayPolicyMemory = $("defaultPolicy").value || oneWayPolicyMemory;
+  }
+  updateSyncModeUi(mode);
+});
+$("defaultPolicy").addEventListener("change", () => {
+  if ($("syncMode").value === SYNC_MODE.ONE_WAY) {
+    oneWayPolicyMemory = $("defaultPolicy").value;
+  }
+});
+$("savePolicies").addEventListener("click", savePolicies);
+$("discardPolicies").addEventListener("click", discardPolicies);
+
+window.addEventListener("beforeunload", (event) => {
+  if (!policiesDirty()) return;
+  event.preventDefault();
+});
 
 loadSettings();
 renderTree();

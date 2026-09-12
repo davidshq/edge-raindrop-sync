@@ -82,10 +82,30 @@ button.secondary {
   color: var(--ink);
   margin-top: 6px;
 }
-button:active { transform: translateY(1px); }
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button:active:not(:disabled) { transform: translateY(1px); }
+.row button.secondary { margin-top: 0; }
 
 .row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .hint { color: var(--muted); font-size: 13px; font-weight: 400; }
+
+.field-help {
+  margin: -6px 0 14px;
+}
+
+.policy-help {
+  list-style: none;
+  margin: -6px 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.policy-help li { margin: 0; }
+.policy-help strong { color: var(--ink); font-weight: 600; }
 
 .status-line { margin: 4px 0 12px; }
 

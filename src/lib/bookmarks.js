@@ -4,6 +4,10 @@
 // resolveMirrorPlacement / resolveEdgeParentForMirror / ancestorIdsForMirrorPath
 // so pull-create and exclude checks cannot drift.
 //
+// Live Edge folder ancestry (resolveLocation / ancestorIdsFromFolder) shares
+// walkAncestorsFromFolder so upload policy and delete-propagation exclude gates
+// walk the same chain. Upload throws on missing ancestors; delete gates soft-truncate.
+//
 // Note on identity: the on-disk Chromium "guid" is not exposed by the
 // chrome.bookmarks API. We use the node `id`, which is stable across browser
 // restarts and survives renames/moves within the profile — which is exactly the
@@ -131,6 +135,41 @@ export async function ancestorIdsForMirrorPath(relativeSegments, rootName, topRo
   return ancestorIds;
 }
 
+/**
+ * Walk folder ids from `folderId` up to (but not including) absolute root "0".
+ * Returns nearest-first ids and root-first titles for the same chain.
+ *
+ * @param {string} folderId
+ * @param {{ soft?: boolean }} [opts] soft=true truncates on missing nodes
+ *   (delete/exclude gates); soft=false (default) rethrows so upload can retry
+ *   instead of syncing with a partial path / missed exclude override.
+ */
+export async function walkAncestorsFromFolder(folderId, { soft = false } = {}) {
+  const ancestorIds = [];
+  const segments = [];
+  let id = folderId;
+  while (id && id !== "0") {
+    ancestorIds.push(id);
+    try {
+      const node = await getNode(id);
+      segments.unshift(node.title);
+      id = node.parentId;
+    } catch (err) {
+      if (soft) break;
+      throw err;
+    }
+  }
+  return { segments, ancestorIds };
+}
+
+/**
+ * Nearest-first ancestor folder ids from `folderId` up to (not including) "0".
+ * Soft-truncates if a folder is already gone (best-effort exclude on delete).
+ */
+export async function ancestorIdsFromFolder(folderId) {
+  return (await walkAncestorsFromFolder(folderId, { soft: true })).ancestorIds;
+}
+
 // Resolve a bookmark's location into:
 //   segments      : folder titles from the top root down to the parent folder
 //                   e.g. ["Favorites bar", "Work", "ProjectA"]
@@ -139,17 +178,13 @@ export async function ancestorIdsForMirrorPath(relativeSegments, rootName, topRo
 // The invisible absolute root (id "0") is excluded. The top root folder (e.g.
 // "Favorites bar" / "Other favorites") is included so both Edge roots are
 // preserved under the chosen Raindrop root collection.
+// Throws if an ancestor is missing so processUpload defers instead of
+// writing an incomplete Raindrop path.
 export async function resolveLocation(node) {
-  const segments = [];
-  const ancestorIds = [];
-  let current = node;
-  while (current && current.parentId && current.parentId !== "0") {
-    const parent = await getNode(current.parentId);
-    segments.unshift(parent.title);
-    ancestorIds.push(parent.id);
-    current = parent;
+  if (!node?.parentId || node.parentId === "0") {
+    return { segments: [], ancestorIds: [] };
   }
-  return { segments, ancestorIds };
+  return walkAncestorsFromFolder(node.parentId);
 }
 
 // Collect every URL-bearing node in the tree (used by backfill), each tagged

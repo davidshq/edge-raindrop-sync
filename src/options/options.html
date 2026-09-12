@@ -9,9 +9,9 @@
     <main>
       <h1>Edge → Raindrop Sync</h1>
       <p class="lede">
-        Sync Edge bookmarks with Raindrop.io, mirroring your folder shape. Choose
-        one-way upload or bidirectional sync, and per-folder whether items are
-        deleted locally, kept, or skipped.
+        Sync Edge bookmarks with Raindrop.io, mirroring your folder shape.
+        Choose how traffic flows; one-way mode also asks what to do with the
+        Edge copy after upload.
       </p>
 
       <section>
@@ -33,21 +33,59 @@
             <option value="bidirectional">Bidirectional Sync</option>
           </select>
         </label>
-        <p id="bidirectionalWarn" class="banner warn hidden">
-          Bidirectional mode propagates <strong>user</strong> deletes both ways:
-          deleting a bookmark in Edge or Raindrop removes the paired item in the
-          other system. Raindrop-only metadata (tags, notes, highlights) is never
-          overwritten from Edge. Policy “Sync &amp; delete” still removes the Edge
-          copy after upload without deleting Raindrop.
+        <p id="oneWayModeHelp" class="field-help hint">
+          Uploads Edge → Raindrop only. Below, choose whether Edge keeps a local
+          copy after a confirmed upload, or offloads (deletes locally).
         </p>
-        <label>
-          Global default policy
-          <select id="defaultPolicy">
-            <option value="sync-and-delete">Sync &amp; delete locally (default)</option>
-            <option value="sync-and-keep">Sync &amp; keep locally</option>
-            <option value="exclude">Exclude (don't sync)</option>
-          </select>
-        </label>
+        <p id="bidirectionalModeHelp" class="field-help hint hidden">
+          Keeps bookmarks in <em>both</em> Edge and Raindrop: pulls Raindrop →
+          Edge under your root, and propagates <strong>user</strong> deletes both
+          ways. Raindrop-only metadata (tags, notes, highlights) is never
+          overwritten from Edge.
+        </p>
+        <p id="bidirectionalWarn" class="banner warn hidden">
+          Deleting a bookmark in Edge or Raindrop removes the paired item in the
+          other system. To offload a specific folder (upload then remove from
+          Edge only), set that folder’s policy to
+          <strong>Offload (delete from Edge)</strong> below — that cleanup does
+          not delete Raindrop.
+        </p>
+
+        <div id="oneWayPolicyBlock">
+          <label>
+            After upload
+            <select id="defaultPolicy">
+              <option value="sync-and-delete">Delete from Edge (offload)</option>
+              <option value="sync-and-keep">Keep in Edge</option>
+              <option value="exclude">Exclude (don't sync)</option>
+            </select>
+          </label>
+          <ul class="policy-help hint">
+            <li>
+              <strong>Delete from Edge</strong> —
+              After a confirmed upload, remove the Edge bookmark. Raindrop keeps
+              the copy. This is the default for one-way offload.
+            </li>
+            <li>
+              <strong>Keep in Edge</strong> —
+              Leave the Edge bookmark after upload (mirror, don’t clear local).
+            </li>
+            <li>
+              <strong>Exclude</strong> —
+              Do not sync by default; use folder policies to opt folders in.
+            </li>
+          </ul>
+        </div>
+
+        <div id="bidirectionalPolicyBlock" class="hidden">
+          <p class="field-help hint">
+            Global default is <strong>keep in both places</strong>. Use folder
+            policies for exceptions: <strong>Exclude</strong> a subtree, or
+            <strong>Offload (delete from Edge)</strong> for folders you still
+            want cleared locally after upload.
+          </p>
+        </div>
+
         <label class="checkbox">
           <input id="pruneEmpty" type="checkbox" />
           Prune empty folders in Edge after their bookmarks are deleted
@@ -80,10 +118,17 @@
       <section>
         <h2>Folder policies</h2>
         <p class="hint">
-          Set an explicit policy on a folder to override the default for it and
-          everything beneath it (nearest folder wins). Overrides survive renames.
+          Override the default for a folder and everything beneath it (nearest
+          folder wins). Options: Keep in Edge, Offload (delete from Edge after
+          upload), or Exclude. Overrides survive renames. Edits stay local until
+          you save.
         </p>
         <div id="tree" class="tree"></div>
+        <div class="row">
+          <button id="savePolicies" type="button" disabled>Save folder policies</button>
+          <button id="discardPolicies" type="button" class="secondary" disabled>Discard</button>
+          <span id="policiesStatus" class="hint"></span>
+        </div>
       </section>
     </main>
     <script type="module" src="options.js"></script>
