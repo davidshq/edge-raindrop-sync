@@ -5,6 +5,9 @@
 // / mirrorPathExists / ensureMirrorFolderPath so pull-create, existing-only skip,
 // mirror-all empty folders, and exclude checks cannot drift.
 //
+// Those path helpers share walkFolderTitles (create vs stop-on-missing) so the
+// Edge title walk cannot diverge.
+//
 // Live Edge folder ancestry (resolveLocation / ancestorIdsFromFolder) shares
 // walkAncestorsFromFolder so upload policy and delete-propagation exclude gates
 // walk the same chain. Upload throws on missing ancestors; delete gates soft-truncate.
@@ -50,20 +53,38 @@ export async function getTopRoots() {
 }
 
 /**
+ * Walk folder titles under `startId`.
+ * @param {"create"|"stop"} [onMissing="stop"] create missing folders, or stop.
+ * @returns {{ parentId: string, ancestorIds: string[], complete: boolean }}
+ *   ancestorIds is nearest-first including startId; complete is false if a
+ *   title was missing and onMissing was "stop".
+ */
+async function walkFolderTitles(startId, titles, { onMissing = "stop" } = {}) {
+  const ancestorIds = [startId];
+  let parentId = startId;
+  for (const title of titles) {
+    const children = await getChildren(parentId);
+    let folder = children.find((c) => !c.url && (c.title || "") === title);
+    if (!folder) {
+      if (onMissing === "create") {
+        folder = await createFolder({ parentId, title });
+      } else {
+        return { parentId, ancestorIds, complete: false };
+      }
+    }
+    parentId = folder.id;
+    ancestorIds.unshift(folder.id);
+  }
+  return { parentId, ancestorIds, complete: true };
+}
+
+/**
  * Ensure folder titles under `parentId` exist; return the deepest folder id.
  * Creates missing folders as needed.
  */
 export async function ensureFolderPath(parentId, titles) {
-  let currentId = parentId;
-  for (const title of titles) {
-    const children = await getChildren(currentId);
-    let folder = children.find((c) => !c.url && (c.title || "") === title);
-    if (!folder) {
-      folder = await createFolder({ parentId: currentId, title });
-    }
-    currentId = folder.id;
-  }
-  return currentId;
+  const walked = await walkFolderTitles(parentId, titles, { onMissing: "create" });
+  return walked.parentId;
 }
 
 /**
@@ -109,11 +130,7 @@ export async function resolveMirrorPlacement(relativeSegments, rootName, topRoot
 
 /** Create (as needed) the Edge parent folder for a Raindrop-mirrored path. */
 export async function resolveEdgeParentForMirror(relativeSegments, rootName, topRoots) {
-  const { startId, titles } = await resolveMirrorPlacement(
-    relativeSegments,
-    rootName,
-    topRoots,
-  );
+  const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName, topRoots);
   return ensureFolderPath(startId, titles);
 }
 
@@ -122,19 +139,9 @@ export async function resolveEdgeParentForMirror(relativeSegments, rootName, top
  * Does not create folders — used by existing-only mode (reconcile + pull-create).
  */
 export async function mirrorPathExists(relativeSegments, rootName, topRoots) {
-  const { startId, titles } = await resolveMirrorPlacement(
-    relativeSegments,
-    rootName,
-    topRoots,
-  );
-  let parentId = startId;
-  for (const title of titles) {
-    const children = await getChildren(parentId);
-    const folder = children.find((c) => !c.url && (c.title || "") === title);
-    if (!folder) return false;
-    parentId = folder.id;
-  }
-  return true;
+  const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName, topRoots);
+  const { complete } = await walkFolderTitles(startId, titles, { onMissing: "stop" });
+  return complete;
 }
 
 /**
@@ -151,20 +158,8 @@ export async function ensureMirrorFolderPath(relativeSegments, rootName, topRoot
  * policy can be evaluated without creating folders.
  */
 export async function ancestorIdsForMirrorPath(relativeSegments, rootName, topRoots) {
-  const { startId, titles } = await resolveMirrorPlacement(
-    relativeSegments,
-    rootName,
-    topRoots,
-  );
-  const ancestorIds = [startId];
-  let parentId = startId;
-  for (const title of titles) {
-    const children = await getChildren(parentId);
-    const folder = children.find((c) => !c.url && (c.title || "") === title);
-    if (!folder) break;
-    ancestorIds.unshift(folder.id);
-    parentId = folder.id;
-  }
+  const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName, topRoots);
+  const { ancestorIds } = await walkFolderTitles(startId, titles, { onMissing: "stop" });
   return ancestorIds;
 }
 

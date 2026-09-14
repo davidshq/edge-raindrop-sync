@@ -18,7 +18,9 @@
 //
 // --cleanup deletes everything the spike created when it finishes.
 
-const API = "https://api.raindrop.io/rest/v1";
+import { RAINDROP_API } from "../src/lib/constants.js";
+
+const API = RAINDROP_API;
 
 const args = process.argv.slice(2);
 const cleanup = args.includes("--cleanup");
@@ -84,7 +86,7 @@ async function main() {
   console.log(
     grand.parent?.$id === child._id
       ? "  ✔ depth-3 nesting via parent.$id confirmed"
-      : "  ✗ grandchild parent did not match — nesting may be limited",
+      : "  ✗ grandchild parent did not match — nesting may be limited"
   );
 
   console.log("\n== 1.3 Child lookup by parent + title; duplicate titles ==");
@@ -96,7 +98,7 @@ async function main() {
   console.log(
     dup._id !== grand._id
       ? `  ⚠ duplicate title allowed under same parent (got new _id ${dup._id}) — ensure-if-missing MUST match existing by title, not blindly create`
-      : "  ✔ duplicate title was de-duplicated by Raindrop",
+      : "  ✔ duplicate title was de-duplicated by Raindrop"
   );
 
   console.log("\n== 1.4 Raindrop creation + rate-limit headers ==");
@@ -113,17 +115,14 @@ async function main() {
   console.log(`  rate-limit headers: ${JSON.stringify(lastRateHeaders)}`);
 
   console.log("\n== 2.1 List raindrops (nested + pagination) ==");
-  const listed = await call(
-    "GET",
-    `/raindrops/${root._id}?nested=true&perpage=50&page=0`,
-  );
+  const listed = await call("GET", `/raindrops/${root._id}?nested=true&perpage=50&page=0`);
   const items = listed.items || [];
   const found = items.some((i) => i._id === drop._id);
   console.log(`  GET /raindrops/${root._id}?nested=true → ${items.length} item(s)`);
   console.log(
     found
       ? "  ✔ nested listing includes grandchild raindrop"
-      : "  ✗ nested listing did not include the spike raindrop",
+      : "  ✗ nested listing did not include the spike raindrop"
   );
   console.log(`  count field: ${listed.count ?? "(none)"}`);
 
@@ -140,7 +139,7 @@ async function main() {
   console.log(
     tagsOk && noteOk
       ? "  ✔ partial PUT preserved tags and note"
-      : "  ✗ rich fields changed — do NOT send empty tags/notes; prefer omit updates in engine if unsafe",
+      : "  ✗ rich fields changed — do NOT send empty tags/notes; prefer omit updates in engine if unsafe"
   );
 
   console.log("\n== 2.2 DELETE moves to Trash ==");
@@ -151,7 +150,7 @@ async function main() {
   console.log(
     inTrash
       ? "  ✔ DELETE /raindrop/{id} moved item to Trash (-99), not permanent"
-      : "  ⚠ not found in Trash page 0 — may have paged out; treat DELETE as soft-delete per docs",
+      : "  ⚠ not found in Trash page 0 — may have paged out; treat DELETE as soft-delete per docs"
   );
   // Permanent cleanup from trash for --cleanup hygiene
   if (inTrash) {
@@ -159,8 +158,14 @@ async function main() {
   }
 
   console.log("\nSpike complete. Findings to fold into the client:");
-  console.log("  - parent.$id nesting depth:", grand.parent?.$id === child._id ? "OK to 3" : "LIMITED");
-  console.log("  - duplicate titles per parent:", dup._id !== grand._id ? "ALLOWED (match-before-create)" : "de-duplicated");
+  console.log(
+    "  - parent.$id nesting depth:",
+    grand.parent?.$id === child._id ? "OK to 3" : "LIMITED"
+  );
+  console.log(
+    "  - duplicate titles per parent:",
+    dup._id !== grand._id ? "ALLOWED (match-before-create)" : "de-duplicated"
+  );
   console.log("  - nested list:", found ? "OK with nested=true" : "FAILED");
   console.log("  - partial PUT rich-field safe:", tagsOk && noteOk ? "YES" : "NO");
   console.log("  - DELETE semantics:", inTrash ? "soft (Trash)" : "check manually");

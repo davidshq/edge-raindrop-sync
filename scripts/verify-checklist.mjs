@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
+import { RAINDROP_API } from "../src/lib/constants.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -120,14 +121,18 @@ globalThis.chrome = {
     },
   },
   alarms: { create() {}, onAlarm: { addListener() {} } },
-  runtime: { onInstalled: { addListener() {} }, onStartup: { addListener() {} }, onMessage: { addListener() {} } },
+  runtime: {
+    onInstalled: { addListener() {} },
+    onStartup: { addListener() {} },
+    onMessage: { addListener() {} },
+  },
 };
 
 /* -------------------------------------------------------------------------- */
 /* Optional live Raindrop client scoped to ERS-Verify-* only                  */
 /* -------------------------------------------------------------------------- */
 
-const API = "https://api.raindrop.io/rest/v1";
+const API = RAINDROP_API;
 const createdLive = { collections: [], raindrops: [] };
 let verifyRootTitle = "";
 
@@ -141,7 +146,7 @@ async function liveCall(method, pathName, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  let json = {};
+  let json;
   try {
     json = text ? JSON.parse(text) : {};
   } catch {
@@ -357,7 +362,7 @@ async function scenario62_oneWay() {
   assert.equal(
     edgeUrls().includes("https://example.com/should-not-pull"),
     false,
-    "one-way does not pull",
+    "one-way does not pull"
   );
 
   const before = mock._raindrops.size;
@@ -421,7 +426,7 @@ async function scenario63_bidirectional() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-pull"),
     false,
-    "tombstone blocks recreate",
+    "tombstone blocks recreate"
   );
 
   // Stale pull-create already on the queue must also honor the tombstone
@@ -438,7 +443,7 @@ async function scenario63_bidirectional() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-pull"),
     false,
-    "stale pull-create honors tombstone",
+    "stale pull-create honors tombstone"
   );
 
   // Pending delete-raindrop cancels a competing pull-create
@@ -461,7 +466,7 @@ async function scenario63_bidirectional() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-pending-del"),
     false,
-    "pending delete blocks pull-create",
+    "pending delete blocks pull-create"
   );
   assert.equal(await eng.store.hasTombstone(pendingRid), true, "delete job still ran");
 
@@ -514,7 +519,7 @@ async function scenario64_syncAndDelete() {
   await eng.store.setOverride(
     folder.id,
     POLICY.SYNC_DELETE,
-    "Favorites bar / ERS-Verify-SAD-Folder",
+    "Favorites bar / ERS-Verify-SAD-Folder"
   );
   const bm = await chrome.bookmarks.create({
     parentId: folder.id,
@@ -532,7 +537,11 @@ async function scenario64_syncAndDelete() {
   only.note = "user-note";
 
   assert.equal(!!findEdgeByUrl("https://example.com/ers-verify-sad"), false, "Edge removed");
-  assert.ok(await eng.store.getRaindropId(bm.id) || await eng.store.getBookmarkIdForRaindrop(String(only._id)), "pair retained");
+  assert.ok(
+    (await eng.store.getRaindropId(bm.id)) ||
+      (await eng.store.getBookmarkIdForRaindrop(String(only._id))),
+    "pair retained"
+  );
   // Policy remove must not delete Raindrop
   assert.equal(only.tags[0], "user-tag");
   assert.equal(only.note, "user-note");
@@ -597,7 +606,7 @@ async function scenario65_exclude() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-exclude-remote"),
     false,
-    "exclude path not ingested",
+    "exclude path not ingested"
   );
 
   // Even if somehow paired, delete under exclude shouldn't be the normal path;
@@ -627,7 +636,11 @@ async function scenario65_exclude() {
   await chrome.bookmarks.remove(laterExcl.id);
   await eng.sync.handleBookmarkRemoved(laterExcl.id, { parentId: keepFolder.id });
   await eng.sync.drain();
-  assert.equal(mock._raindrops.has(Number(rid)), true, "mapped exclude delete does not hit Raindrop");
+  assert.equal(
+    mock._raindrops.has(Number(rid)),
+    true,
+    "mapped exclude delete does not hit Raindrop"
+  );
 
   // Synced, then exclude — remote Raindrop delete must not remove Edge.
   const keepRemote = await chrome.bookmarks.create({
@@ -646,28 +659,28 @@ async function scenario65_exclude() {
   await eng.store.setOverride(
     keepRemote.id,
     POLICY.EXCLUDE,
-    "Favorites bar / ERS-Verify-WasKeep-Remote",
+    "Favorites bar / ERS-Verify-WasKeep-Remote"
   );
   await mock.deleteRaindrop(Number(ridRemote));
   await eng.reconcile.reconcile();
   await eng.sync.drain();
   assert.ok(
     findEdgeByUrl("https://example.com/ers-verify-later-exclude-remote"),
-    "excluded Edge bookmark kept after remote Raindrop delete",
+    "excluded Edge bookmark kept after remote Raindrop delete"
   );
   assert.equal(
     await eng.store.getRaindropId(laterExclRemote.id),
     null,
-    "pair cleared so DELETE_EDGE does not thrash",
+    "pair cleared so DELETE_EDGE does not thrash"
   );
   assert.equal(
     await eng.store.hasTombstone(String(ridRemote)),
     true,
-    "tombstone recorded for absent raindrop",
+    "tombstone recorded for absent raindrop"
   );
 
   console.log(
-    "  ✔ exclude blocks upload + ingest; Edge↔Raindrop deletes do not propagate either way",
+    "  ✔ exclude blocks upload + ingest; Edge↔Raindrop deletes do not propagate either way"
   );
 }
 
@@ -704,17 +717,17 @@ async function scenario66_raindropFolderModes() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-papers"),
     false,
-    "existing-only skips missing path",
+    "existing-only skips missing path"
   );
   assert.equal(
     [...bookmarks.values()].some((n) => !n.url && n.title === "Research"),
     false,
-    "existing-only creates no Research folder",
+    "existing-only creates no Research folder"
   );
   assert.equal(
     [...bookmarks.values()].some((n) => !n.url && n.title === "_Unfiled"),
     false,
-    "no catch-all / _Unfiled",
+    "no catch-all / _Unfiled"
   );
 
   // Stale pull job still dropped at drain without creating folders
@@ -730,7 +743,7 @@ async function scenario66_raindropFolderModes() {
   assert.equal(
     !!findEdgeByUrl("https://example.com/ers-verify-stale-existing"),
     false,
-    "drain existing-only drops incomplete path",
+    "drain existing-only drops incomplete path"
   );
 
   // --- create-as-needed: folders + bookmark; empty Inbox still absent ---
@@ -749,16 +762,16 @@ async function scenario66_raindropFolderModes() {
   assert.ok(pulled, "create-as-needed pulled bookmark");
   assert.ok(
     [...bookmarks.values()].some((n) => !n.url && n.title === "Research"),
-    "create-as-needed created Research",
+    "create-as-needed created Research"
   );
   assert.ok(
     [...bookmarks.values()].some((n) => !n.url && n.title === "Papers"),
-    "create-as-needed created Papers",
+    "create-as-needed created Papers"
   );
   assert.equal(
     [...bookmarks.values()].some((n) => !n.url && n.title === "Inbox"),
     false,
-    "create-as-needed does not mirror empty Inbox",
+    "create-as-needed does not mirror empty Inbox"
   );
 
   // --- mirror-all: empty Inbox folder appears ---
@@ -775,10 +788,186 @@ async function scenario66_raindropFolderModes() {
   assert.ok(findEdgeByUrl("https://example.com/ers-verify-papers"), "mirror-all still pulls");
   assert.ok(
     [...bookmarks.values()].some((n) => !n.url && n.title === "Inbox"),
-    "mirror-all ensures empty Inbox folder",
+    "mirror-all ensures empty Inbox folder"
   );
 
   console.log("  ✔ existing-only skip; create-as-needed; mirror-all empty folders");
+}
+
+async function scenario67_raindropFolderAllowlist() {
+  console.log("\n== 6.7 Raindrop folder allowlist ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE } = eng.constants;
+  await resetAll(eng.store);
+  const mock = makeMockRaindrop();
+  patchClient(eng.raindropMod, mock);
+
+  const rootName = "ERS-Verify-Allowlist";
+  const root = await mock.createCollection(rootName, null);
+  const research = await mock.createCollection("Research", root._id);
+  const papers = await mock.createCollection("Papers", research._id);
+  await mock.createCollection("Inbox", research._id);
+  const other = await mock.createCollection("Other", root._id);
+
+  mock._seedRich(papers._id, {
+    link: "https://example.com/ers-verify-allow-papers",
+    title: "ERS allow papers",
+  });
+  mock._seedRich(other._id, {
+    link: "https://example.com/ers-verify-allow-other",
+    title: "ERS allow other",
+  });
+
+  // Non-empty allowlist: only Research (covers Papers); Other skipped; Inbox ensured.
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+    raindropFolderAllowlist: {
+      [String(research._id)]: { path: "Research" },
+    },
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-allow-papers"),
+    "allowlisted subtree pulls"
+  );
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-allow-other"),
+    false,
+    "unchecked Raindrop-only skipped"
+  );
+  assert.ok(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Inbox"),
+    "allowlist ensures empty Inbox under Research"
+  );
+  assert.equal(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Other"),
+    false,
+    "unchecked empty Other not created"
+  );
+
+  // Edge-existing bypass: put Other on Edge, keep allowlist without Other.
+  await resetAll(eng.store);
+  const otherRoot = await chrome.bookmarks.create({
+    parentId: "2",
+    title: rootName,
+  });
+  await chrome.bookmarks.create({
+    parentId: otherRoot.id,
+    title: "Other",
+  });
+
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+    raindropFolderAllowlist: {
+      [String(research._id)]: { path: "Research" },
+    },
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-allow-other"),
+    "Edge-existing bypasses allowlist"
+  );
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-allow-papers"),
+    "allowlisted still pulls under existing-only"
+  );
+
+  // Empty allowlist preserves create-as-needed (Other path missing → still creates).
+  await resetAll(eng.store);
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+    raindropFolderAllowlist: {},
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-allow-other"),
+    "empty allowlist leaves create-as-needed unchanged"
+  );
+
+  // Prune: after Research subtree is fully on Edge, stale allowlist clears.
+  await resetAll(eng.store);
+  const folderRoot = await chrome.bookmarks.create({
+    parentId: "2",
+    title: rootName,
+  });
+  const researchEdge = await chrome.bookmarks.create({
+    parentId: folderRoot.id,
+    title: "Research",
+  });
+  await chrome.bookmarks.create({ parentId: researchEdge.id, title: "Papers" });
+  await chrome.bookmarks.create({ parentId: researchEdge.id, title: "Inbox" });
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+    raindropFolderAllowlist: {
+      [String(research._id)]: { path: "Research" },
+      99999: { path: "Deleted" },
+    },
+  });
+  await eng.reconcile.reconcile();
+  const afterPrune = await eng.store.getConfig();
+  assert.deepEqual(
+    afterPrune.raindropFolderAllowlist,
+    {},
+    "reconcile prunes fully-mirrored + missing allowlist ids"
+  );
+  // With allowlist cleared, Other (still Raindrop-only) pulls under create-as-needed.
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-allow-other"),
+    "after prune, create-as-needed resumes for new Raindrop-only"
+  );
+
+  // Legacy pull job without collectionId still resolves under allowlist.
+  await resetAll(eng.store);
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+    raindropFolderAllowlist: {
+      [String(research._id)]: { path: "Research" },
+    },
+  });
+  const { JOB } = eng.constants;
+  await eng.queue.enqueueJob({
+    id: "pull-legacy-no-col",
+    kind: JOB.PULL_CREATE,
+    raindropId: "legacy-col",
+    link: "https://example.com/ers-verify-legacy-col",
+    title: "legacy",
+    relativeSegments: ["Research", "Papers"],
+    // intentionally no collectionId
+  });
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-legacy-col"),
+    "legacy pull resolves collectionId from path"
+  );
+
+  console.log(
+    "  ✔ allowlist skip/allow/empty-folder/Edge-bypass/empty-preserves-mode/prune/legacy"
+  );
 }
 
 async function optionalLiveSmoke() {
@@ -808,9 +997,12 @@ async function optionalLiveSmoke() {
 
     const listed = await liveCall(
       "GET",
-      `/raindrops/${root.item._id}?nested=true&perpage=50&page=0`,
+      `/raindrops/${root.item._id}?nested=true&perpage=50&page=0`
     );
-    assert.ok((listed.items || []).some((i) => i._id === created.item._id), "nested list");
+    assert.ok(
+      (listed.items || []).some((i) => i._id === created.item._id),
+      "nested list"
+    );
 
     await liveCall("PUT", `/raindrop/${created.item._id}`, { title: "ERS-Verify-Live-Renamed" });
     const after = await liveCall("GET", `/raindrop/${created.item._id}`);
@@ -827,7 +1019,9 @@ async function optionalLiveSmoke() {
 }
 
 async function main() {
-  console.log(`Mode: ${USE_LIVE ? "mock Edge + live Raindrop (ERS-Verify-* only)" : "fully mocked (no real Edge/Raindrop writes)"}`);
+  console.log(
+    `Mode: ${USE_LIVE ? "mock Edge + live Raindrop (ERS-Verify-* only)" : "fully mocked (no real Edge/Raindrop writes)"}`
+  );
   console.log("Edge: in-memory disposable tree only (Favorites bar / Other favorites).");
 
   await scenario62_oneWay();
@@ -835,6 +1029,7 @@ async function main() {
   await scenario64_syncAndDelete();
   await scenario65_exclude();
   await scenario66_raindropFolderModes();
+  await scenario67_raindropFolderAllowlist();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

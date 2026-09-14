@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -9,9 +9,8 @@
     <main>
       <h1>Edge → Raindrop Sync</h1>
       <p class="lede">
-        Sync Edge bookmarks with Raindrop.io, mirroring your folder shape.
-        Choose how traffic flows; one-way mode also asks what to do with the
-        Edge copy after upload.
+        Sync Edge bookmarks with Raindrop.io, mirroring your folder shape. Choose how traffic flows;
+        one-way mode also asks what to do with the Edge copy after upload.
       </p>
 
       <section>
@@ -34,21 +33,18 @@
           </select>
         </label>
         <p id="oneWayModeHelp" class="field-help hint">
-          Uploads Edge → Raindrop only. Below, choose whether Edge keeps a local
-          copy after a confirmed upload, or offloads (deletes locally).
+          Uploads Edge → Raindrop only. Below, choose whether Edge keeps a local copy after a
+          confirmed upload, or offloads (deletes locally).
         </p>
         <p id="bidirectionalModeHelp" class="field-help hint hidden">
-          Keeps bookmarks in <em>both</em> Edge and Raindrop: pulls Raindrop →
-          Edge under your root, and propagates <strong>user</strong> deletes both
-          ways. Raindrop-only metadata (tags, notes, highlights) is never
-          overwritten from Edge.
+          Keeps bookmarks in <em>both</em> Edge and Raindrop: pulls Raindrop → Edge under your root,
+          and propagates <strong>user</strong> deletes both ways. Raindrop-only metadata (tags,
+          notes, highlights) is never overwritten from Edge.
         </p>
         <p id="bidirectionalWarn" class="banner warn hidden">
-          Deleting a bookmark in Edge or Raindrop removes the paired item in the
-          other system. To offload a specific folder (upload then remove from
-          Edge only), set that folder’s policy to
-          <strong>Offload (delete from Edge)</strong> below — that cleanup does
-          not delete Raindrop.
+          Deleting a bookmark in Edge or Raindrop removes the paired item in the other system. To
+          offload a specific folder (upload then remove from Edge only), set that folder’s policy to
+          <strong>Offload (delete from Edge)</strong> below — that cleanup does not delete Raindrop.
         </p>
 
         <div id="oneWayPolicyBlock">
@@ -62,27 +58,26 @@
           </label>
           <ul class="policy-help hint">
             <li>
-              <strong>Delete from Edge</strong> —
-              After a confirmed upload, remove the Edge bookmark. Raindrop keeps
-              the copy. This is the default for one-way offload.
+              <strong>Delete from Edge</strong> — After a confirmed upload, remove the Edge
+              bookmark. Raindrop keeps the copy. This is the default for one-way offload.
             </li>
             <li>
-              <strong>Keep in Edge</strong> —
-              Leave the Edge bookmark after upload (mirror, don’t clear local).
+              <strong>Keep in Edge</strong> — Leave the Edge bookmark after upload (mirror, don’t
+              clear local).
             </li>
             <li>
-              <strong>Exclude</strong> —
-              Do not sync by default; use folder policies to opt folders in.
+              <strong>Exclude</strong> — Do not sync by default; use folder policies to opt folders
+              in.
             </li>
           </ul>
         </div>
 
         <div id="bidirectionalPolicyBlock" class="hidden">
           <p class="field-help hint">
-            Global default is <strong>keep in both places</strong>. Use folder
-            policies for exceptions: <strong>Exclude</strong> a subtree, or
-            <strong>Offload (delete from Edge)</strong> for folders you still
-            want cleared locally after upload.
+            Global default is <strong>keep in both places</strong>. Use folder policies for
+            exceptions: <strong>Exclude</strong> a subtree, or
+            <strong>Offload (delete from Edge)</strong> for folders you still want cleared locally
+            after upload.
           </p>
           <label>
             Raindrop → Edge folders
@@ -92,18 +87,20 @@
               <option value="mirror-all">Mirror all collections (incl. empty)</option>
             </select>
           </label>
-          <p id="folderModeHelpExisting" class="field-help hint hidden">
-            Pull bookmarks only into folder paths that already exist in Edge.
-            Raindrop-only paths are skipped entirely (no catch-all folder).
+          <p id="folderModeHelpExisting" class="field-help hint">
+            Pull bookmarks only into folder paths that already exist in Edge, unless you opt in
+            Raindrop-only collections under Folder policies below. Unchecked Raindrop-only paths are
+            skipped (no catch-all).
           </p>
           <p id="folderModeHelpCreate" class="field-help hint hidden">
-            When pulling a bookmark, create missing Edge folders along its
-            collection path. Empty Raindrop collections stay invisible in Edge.
-            Unrecognized paths land under Other favorites / root name.
+            When pulling a bookmark, create missing Edge folders along its collection path. Empty
+            Raindrop collections stay invisible unless you check them under Folder policies. Once
+            any Raindrop-only collection is checked, only checked ones sync.
           </p>
           <p id="folderModeHelpMirror" class="field-help hint hidden">
-            Like create-as-needed, and also create Edge folders for empty
-            Raindrop collections under your root so the tree shapes match.
+            Like create-as-needed, and also create Edge folders for empty Raindrop collections under
+            your root—unless a Raindrop-only allowlist is set under Folder policies, which then
+            limits sync to checked collections.
           </p>
         </div>
 
@@ -121,8 +118,8 @@
         <h2>Status</h2>
         <div id="haltBanner" class="banner hidden"></div>
         <p class="status-line">
-          Pending in queue: <strong id="pending">0</strong> ·
-          Last activity: <span id="lastActivity">—</span>
+          Pending in queue: <strong id="pending">0</strong> · Last activity:
+          <span id="lastActivity">—</span>
         </p>
         <p id="reconcileLine" class="status-line muted hidden">
           Last reconcile: <span id="lastReconcile">—</span>
@@ -139,12 +136,33 @@
       <section>
         <h2>Folder policies</h2>
         <p class="hint">
-          Override the default for a folder and everything beneath it (nearest
-          folder wins). Options: Keep in Edge, Offload (delete from Edge after
-          upload), or Exclude. Overrides survive renames. Edits stay local until
-          you save.
+          Override the default for a folder and everything beneath it (nearest folder wins).
+          Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Overrides
+          survive renames. Edits stay local until you save. Raindrop-only collections are opted in
+          via the section at the bottom (bidirectional only)—not in this Edge tree.
         </p>
         <div id="tree" class="tree"></div>
+
+        <details id="raindropOnlySection" class="rd-expand hidden">
+          <summary>Choose Raindrop-only collections to sync</summary>
+          <div class="rd-body">
+            <p class="hint intro">
+              Collections under your Raindrop root that are not fully in Edge. Check to create the
+              folder and pull items. New collections stay unchecked. Once any are checked, only
+              checked Raindrop-only paths sync. <strong>Clear selection</strong> exits selective
+              mode (then save). Saves with <strong>Save folder policies</strong>.
+            </p>
+            <div class="rd-toolbar">
+              <button id="refreshRaindropOnly" type="button" class="secondary">Refresh</button>
+              <button id="clearRaindropOnly" type="button" class="secondary" disabled>
+                Clear selection
+              </button>
+              <span id="raindropOnlyStatus" class="hint"></span>
+            </div>
+            <div id="raindropOnlyList" class="rd-list"></div>
+          </div>
+        </details>
+
         <div class="row">
           <button id="savePolicies" type="button" disabled>Save folder policies</button>
           <button id="discardPolicies" type="button" class="secondary" disabled>Discard</button>

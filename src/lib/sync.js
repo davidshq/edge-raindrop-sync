@@ -42,7 +42,13 @@ import {
 } from "./bookmarks.js";
 import { resolvePolicy, isExcluded } from "./policy.js";
 import { RaindropClient, AuthError, RateLimitError } from "./raindrop.js";
-import { buildCollectionIndex, ensureCollectionPath } from "./collections.js";
+import {
+  buildCollectionIndex,
+  ensureCollectionPath,
+  findRootCollection,
+  collectionIdFromRelative,
+} from "./collections.js";
+import { canCreateRaindropOnlyPath } from "./allowlist.js";
 import { reconcile } from "./reconcile.js";
 
 let draining = false; // best-effort in-memory reentrancy guard (idempotent anyway)
@@ -194,7 +200,7 @@ async function processUpload(job, ctx) {
       fullSegments,
       cache,
       cacheCollection,
-      uncacheCollection,
+      uncacheCollection
     );
     const item = await client.createRaindrop({
       link: node.url,
@@ -217,7 +223,7 @@ async function processUpload(job, ctx) {
 }
 
 async function processPullCreate(job, ctx) {
-  const { config } = ctx;
+  const { config, getIndex } = ctx;
   const rid = String(job.raindropId);
 
   // Already paired (e.g. raced with upload).
@@ -243,19 +249,39 @@ async function processPullCreate(job, ctx) {
 
   const relative = job.relativeSegments || [];
   const folderMode = config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
-  // existing-only: never create folders or a catch-all; drop the job if path missing.
-  if (folderMode === RAINDROP_FOLDER_MODE.EXISTING_ONLY) {
-    if (!(await mirrorPathExists(relative, config.rootName))) {
-      await queue.remove(job.id);
-      const pathLabel = relative.length ? relative.join("/") : "(root)";
-      await appendLog("info", `Skipped pull: path not in Edge (${pathLabel}).`);
-      return;
+  const allowlist = config.raindropFolderAllowlist || {};
+  const edgeExists = await mirrorPathExists(relative, config.rootName);
+
+  let index = null;
+  let rootId = null;
+  let collectionId = job.collectionId ?? null;
+  if (!edgeExists) {
+    index = await getIndex();
+    const root = findRootCollection(index, config.rootName);
+    rootId = root?._id ?? null;
+    // Legacy pull jobs (pre-allowlist) omit collectionId — resolve from path.
+    if (collectionId == null && rootId != null && relative.length) {
+      collectionId = collectionIdFromRelative(index, rootId, relative);
     }
   }
 
+  if (
+    !canCreateRaindropOnlyPath({
+      allowlist,
+      collectionId,
+      index,
+      rootId,
+      edgePathExists: edgeExists,
+      folderMode,
+    })
+  ) {
+    await queue.remove(job.id);
+    const pathLabel = relative.length ? relative.join("/") : "(root)";
+    await appendLog("info", `Skipped pull: path not allowed (${pathLabel}).`);
+    return;
+  }
+
   await suppressCreate(job.link);
-  // create-as-needed / mirror-all: ensure-if-missing. existing-only reaches here
-  // only when the full path already exists (ensure is a no-op create).
   const parentId = await resolveEdgeParentForMirror(relative, config.rootName);
   const node = await createBookmark({
     parentId,
@@ -316,7 +342,7 @@ async function processDeleteEdge(job, ctx) {
       if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
         await appendLog(
           "info",
-          `Skipped Edge delete for excluded bookmark ${bookmarkId} (raindrop ${rid} gone).`,
+          `Skipped Edge delete for excluded bookmark ${bookmarkId} (raindrop ${rid} gone).`
         );
       } else {
         await suppressRemove(bookmarkId);
@@ -359,10 +385,7 @@ export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
     const overrides = await getOverrides();
     const ancestorIds = await ancestorIdsFromFolder(removeInfo.parentId);
     if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
-      await appendLog(
-        "info",
-        `Skipped Raindrop delete for excluded Edge bookmark ${bookmarkId}.`,
-      );
+      await appendLog("info", `Skipped Raindrop delete for excluded Edge bookmark ${bookmarkId}.`);
       return;
     }
   }

@@ -6,8 +6,32 @@
 // also persist a path -> collectionId cache so steady-state syncs make zero
 // collection lookups. Cache hits are validated against the live index so a
 // deleted/renamed Raindrop collection cannot keep receiving new raindrops.
+//
+// Index maps store dual keys (id + String(id)); use getById / getByParent so
+// call sites never miss a collection due to number/string mismatch.
 
 const ROOT = "root"; // sentinel parent key for top-level collections
+
+/**
+ * Lookup a collection by id, tolerating number vs string keys (index stores both).
+ * @param {{ byId?: Map }|null|undefined} index
+ * @param {string|number|null|undefined} id
+ */
+export function getById(index, id) {
+  if (id == null || !index?.byId) return null;
+  return index.byId.get(id) || index.byId.get(String(id)) || null;
+}
+
+/**
+ * Children map for a parent id (title→collection), with number/string key fallback.
+ * @param {{ byParent?: Map }|null|undefined} index
+ * @param {string|number} parentId
+ * @returns {Map|undefined}
+ */
+export function getByParent(index, parentId) {
+  if (parentId == null || !index?.byParent) return undefined;
+  return index.byParent.get(parentId) || index.byParent.get(String(parentId));
+}
 
 /**
  * Build collection indexes from the account's root and nested collections.
@@ -34,7 +58,7 @@ export async function buildCollectionIndex(client) {
 
 /** Find a root-level collection by title (case-insensitive). */
 export function findRootCollection(index, title) {
-  const siblings = index.byParent.get(ROOT);
+  const siblings = getByParent(index, ROOT);
   return siblings?.get((title || "").toLowerCase()) ?? null;
 }
 
@@ -44,7 +68,7 @@ export function findRootCollection(index, title) {
  */
 export function collectionPathFromRoot(index, collectionId, rootId) {
   const titles = [];
-  let current = index.byId.get(collectionId) || index.byId.get(String(collectionId));
+  let current = getById(index, collectionId);
   const seen = new Set();
   while (current) {
     if (seen.has(current._id)) return [];
@@ -53,15 +77,14 @@ export function collectionPathFromRoot(index, collectionId, rootId) {
     if (String(current._id) === String(rootId)) return titles;
     const parentId = current.parent?.$id;
     if (parentId == null) return []; // walked off the top without hitting root
-    current = index.byId.get(parentId) || index.byId.get(String(parentId));
+    current = getById(index, parentId);
   }
   return [];
 }
 
 /** True when `id` is present in the live collection index. */
 export function collectionIdAlive(index, id) {
-  if (id == null || !index?.byId) return false;
-  return index.byId.has(id) || index.byId.has(String(id));
+  return getById(index, id) != null;
 }
 
 /**
@@ -84,6 +107,23 @@ export function collectionsUnderRoot(index, rootId) {
 }
 
 /**
+ * Resolve a Raindrop collection id from titles relative to `rootId`
+ * (e.g. ["Favorites bar", "Work"]). Returns null if any segment is missing.
+ */
+export function collectionIdFromRelative(index, rootId, relativeSegments) {
+  if (!index?.byParent || rootId == null) return null;
+  let parentId = rootId;
+  let col = getById(index, rootId);
+  for (const title of relativeSegments || []) {
+    const siblings = getByParent(index, parentId);
+    col = siblings?.get((title || "").toLowerCase()) ?? null;
+    if (!col) return null;
+    parentId = col._id;
+  }
+  return col ? col._id : null;
+}
+
+/**
  * Ensure every collection along `fullSegments` exists (e.g.
  * ["Edge", "Favorites bar", "Work"]) and return the deepest collection's id.
  *
@@ -91,14 +131,7 @@ export function collectionsUnderRoot(index, rootId) {
  * `persist(path, id)` writes a warm entry; optional `uncache(path)` drops a
  * stale entry when the cached id is missing from the live index.
  */
-export async function ensureCollectionPath(
-  client,
-  index,
-  fullSegments,
-  cache,
-  persist,
-  uncache,
-) {
+export async function ensureCollectionPath(client, index, fullSegments, cache, persist, uncache) {
   const byParent = index.byParent || index;
   let parentId = ROOT;
   let pathSoFar = "";
@@ -119,7 +152,10 @@ export async function ensureCollectionPath(
       if (typeof uncache === "function") await uncache(pathSoFar);
     }
 
-    const siblings = byParent.get(parentId);
+    // Prefer getByParent when index has byId/byParent shape; fall back for
+    // legacy callers that pass a bare byParent Map as `index`.
+    const siblings =
+      index.byParent != null ? getByParent(index, parentId) : byParent.get(parentId);
     let col = siblings && siblings.get(title.toLowerCase());
     if (!col) {
       col = await client.createCollection(title, parentId === ROOT ? null : parentId);

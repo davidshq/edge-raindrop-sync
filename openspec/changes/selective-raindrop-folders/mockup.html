@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mockup — Raindrop-only collections under Folder policies</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --card: #ffffff;
+        --ink: #1b1f24;
+        --muted: #6b7280;
+        --line: #e3e6ea;
+        --accent: #2563eb;
+        --warn-bg: #fffbeb;
+        --warn-ink: #92400e;
+        --warn-line: #fcd34d;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      .page { max-width: 1280px; margin: 0 auto; padding: 28px 20px 64px; }
+      .page > h1 { font-size: 22px; margin: 0 0 4px; }
+      .page > .lede { color: var(--muted); margin: 0 0 24px; }
+      .compare {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        align-items: start;
+      }
+      @media (max-width: 960px) {
+        .compare { grid-template-columns: 1fr; }
+      }
+      .col-label {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+      .col-label.next {
+        color: #1d4ed8;
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 999px;
+        padding: 3px 10px;
+      }
+      .opts h1 { font-size: 22px; margin: 0 0 4px; }
+      .opts .lede { color: var(--muted); margin: 0 0 24px; }
+      section {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+      h2 { font-size: 16px; margin: 0 0 16px; }
+      label { display: block; margin-bottom: 14px; font-weight: 500; }
+      label.checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 400;
+      }
+      input[type="text"],
+      input[type="password"],
+      select {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: inherit;
+        background: #fff;
+      }
+      button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 8px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+      }
+      button.secondary { background: #eef1f5; color: var(--ink); }
+      button:disabled { opacity: 0.45; }
+      .row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+      .hint { color: var(--muted); font-size: 13px; font-weight: 400; }
+      .field-help { margin: -6px 0 14px; }
+      .banner.warn {
+        background: var(--warn-bg);
+        color: var(--warn-ink);
+        border: 1px solid var(--warn-line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+      }
+      .tree { font-size: 13px; }
+      .tree-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+      }
+      .tree-row .name { flex: 1; min-width: 0; }
+      .tree-row .name .path { color: var(--muted); font-size: 11px; }
+      .tree-row select {
+        width: auto;
+        margin: 0;
+        padding: 4px 6px;
+        display: inline-block;
+      }
+      .callout {
+        margin: 0 0 14px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #fecaca;
+        background: #fef2f2;
+        color: #991b1b;
+        font-size: 13px;
+      }
+      details.rd-expand {
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      details.rd-expand.highlight {
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+      }
+      details.rd-expand > summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 12px 14px;
+        background: #fafbfc;
+        font-weight: 600;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      details.rd-expand > summary::-webkit-details-marker { display: none; }
+      details.rd-expand > summary::after {
+        content: "▸";
+        color: var(--muted);
+        font-weight: 400;
+      }
+      details.rd-expand[open] > summary::after { content: "▾"; }
+      .rd-body { padding: 0 12px 12px; border-top: 1px solid var(--line); }
+      .rd-body .intro { margin: 10px 0 12px; }
+      .rd-toolbar {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 8px;
+      }
+      .rd-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 8px 0;
+        border-top: 1px solid var(--line);
+      }
+      .rd-row.indent { padding-left: 22px; }
+      .rd-row .meta { flex: 1; min-width: 0; }
+      .rd-row .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+      .badge {
+        flex-shrink: 0;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        background: #f3f4f6;
+      }
+      .badge.only {
+        color: #1e40af;
+        background: #eff6ff;
+        border-color: #bfdbfe;
+      }
+      .badge.empty {
+        color: #92400e;
+        background: #fffbeb;
+        border-color: #fcd34d;
+      }
+      .footnote {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Raindrop-only collections under Folder policies</h1>
+      <p class="lede">
+        Left = today. Right = recommended: no new Settings mode—an expandable at the
+        bottom of Folder policies to opt in Raindrop-only collections.
+      </p>
+
+      <div class="compare">
+        <!-- NOW -->
+        <div>
+          <div class="col-label">Now</div>
+          <div class="opts">
+            <section>
+              <h2>Settings (snippet)</h2>
+              <label>
+                Raindrop → Edge folders
+                <select disabled>
+                  <option>Existing Edge folders only</option>
+                  <option selected>Create folders as needed</option>
+                  <option>Mirror all collections (incl. empty)</option>
+                </select>
+              </label>
+              <p class="field-help hint">All-or-nothing. No picker for individual Raindrop-only folders.</p>
+            </section>
+
+            <section>
+              <h2>Folder policies</h2>
+              <p class="hint">
+                Override the default for a folder and everything beneath it. Edge folders only.
+              </p>
+              <div class="callout">
+                Raindrop-only collections (Research, Recipes, …) never appear in this list.
+              </div>
+              <div class="tree">
+                <div class="tree-row">
+                  <div class="name">
+                    <div>Favorites bar</div>
+                    <div class="path">Favorites bar</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+                <div class="tree-row" style="padding-left: 18px">
+                  <div class="name">
+                    <div>Work</div>
+                    <div class="path">Favorites bar / Work</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+                <div class="tree-row">
+                  <div class="name">
+                    <div>Other favorites</div>
+                    <div class="path">Other favorites</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+              </div>
+              <div class="row">
+                <button type="button" disabled>Save folder policies</button>
+                <button type="button" class="secondary" disabled>Discard</button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- RECOMMENDED -->
+        <div>
+          <div class="col-label next">Recommended</div>
+          <div class="opts">
+            <section>
+              <h2>Settings (snippet)</h2>
+              <label>
+                Raindrop → Edge folders
+                <select disabled>
+                  <option selected>Existing Edge folders only</option>
+                  <option>Create folders as needed</option>
+                  <option>Mirror all collections (incl. empty)</option>
+                </select>
+              </label>
+              <p class="field-help hint">
+                Same three modes—no “Selected” option. Use Folder policies below to opt in
+                Raindrop-only collections. Checking any collection turns on selective sync for
+                Raindrop-only paths.
+              </p>
+            </section>
+
+            <section>
+              <h2>Folder policies</h2>
+              <p class="hint">
+                Edge folders above: Keep / Offload / Exclude. Raindrop-only opt-in is the
+                expandable at the bottom.
+              </p>
+              <div class="tree">
+                <div class="tree-row">
+                  <div class="name">
+                    <div>Favorites bar</div>
+                    <div class="path">Favorites bar</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+                <div class="tree-row" style="padding-left: 18px">
+                  <div class="name">
+                    <div>Work</div>
+                    <div class="path">Favorites bar / Work</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+                <div class="tree-row">
+                  <div class="name">
+                    <div>Other favorites</div>
+                    <div class="path">Other favorites</div>
+                  </div>
+                  <select disabled><option>Inherit</option></select>
+                </div>
+              </div>
+
+              <details class="rd-expand highlight" open>
+                <summary>Choose Raindrop-only collections to sync</summary>
+                <div class="rd-body">
+                  <p class="hint intro">
+                    These exist in Raindrop under your root but not yet in Edge. Check to
+                    create the folder and pull items. New collections stay unchecked.
+                    Saves with <strong>Save folder policies</strong>.
+                  </p>
+                  <div class="rd-toolbar">
+                    <button type="button" class="secondary">Refresh</button>
+                  </div>
+                  <div class="rd-row">
+                    <input type="checkbox" checked />
+                    <div class="meta">
+                      <div>Research</div>
+                      <div class="sub">Parent includes children</div>
+                    </div>
+                    <span class="badge only">Raindrop only</span>
+                  </div>
+                  <div class="rd-row indent">
+                    <input type="checkbox" checked disabled />
+                    <div class="meta">
+                      <div>Papers</div>
+                      <div class="sub">Included via Research</div>
+                    </div>
+                    <span class="badge only">Raindrop only</span>
+                  </div>
+                  <div class="rd-row indent">
+                    <input type="checkbox" checked disabled />
+                    <div class="meta">
+                      <div>Inbox</div>
+                      <div class="sub">Empty — folder created on reconcile</div>
+                    </div>
+                    <span class="badge empty">empty</span>
+                  </div>
+                  <div class="rd-row">
+                    <input type="checkbox" />
+                    <div class="meta">
+                      <div>Recipes</div>
+                      <div class="sub">Left unchecked — stays Raindrop-only</div>
+                    </div>
+                    <span class="badge only">Raindrop only</span>
+                  </div>
+                </div>
+              </details>
+
+              <div class="row">
+                <button type="button">Save folder policies</button>
+                <button type="button" class="secondary">Discard</button>
+                <span class="hint">Unsaved changes</span>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <p class="footnote">
+        Open via http://127.0.0.1:8765/mockup.html if the local server is running, or open this
+        file directly in a browser.
+      </p>
+    </div>
+  </body>
+</html>

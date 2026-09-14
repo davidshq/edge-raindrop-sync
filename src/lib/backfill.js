@@ -3,7 +3,7 @@
 //
 // The durable queue IS the resumable cursor: enqueued ids are persisted, so a
 // worker restart mid-backfill resumes from whatever is still queued rather than
-// re-walking and re-uploading. The dedup map guards against re-uploads too.
+// re-walking and re-uploading. The pair map (hasSynced) guards against re-uploads too.
 
 import { POLICY } from "./constants.js";
 import { getConfig, getOverrides, hasSynced, appendLog, setStatus } from "./store.js";

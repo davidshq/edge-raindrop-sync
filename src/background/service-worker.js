@@ -8,7 +8,7 @@
 // alive through fetch/storage. The heartbeat is (re)created on every SW
 // evaluation, not only onInstalled/onStartup.
 
-import { ALARM_NAME, HEARTBEAT_MINUTES } from "../lib/constants.js";
+import { ALARM_NAME, HEARTBEAT_MINUTES, MSG } from "../lib/constants.js";
 import { tick, drain, handleBookmarkCreated, handleBookmarkRemoved } from "../lib/sync.js";
 import { startBackfill } from "../lib/backfill.js";
 import { reconcile } from "../lib/reconcile.js";
@@ -67,24 +67,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   (async () => {
     try {
       switch (msg?.type) {
-        case "runBackfill": {
+        case MSG.RUN_BACKFILL: {
           const result = await startBackfill();
           await drain();
           sendResponse({ ok: true, ...result });
           break;
         }
-        case "drainNow": {
+        case MSG.DRAIN_NOW: {
           await drain();
           sendResponse({ ok: true });
           break;
         }
-        case "reconcileNow": {
+        case MSG.RECONCILE_NOW: {
           const result = await reconcile();
           await drain();
           sendResponse({ ok: true, ...result });
           break;
         }
-        case "getStatus": {
+        case MSG.GET_STATUS: {
           const config = await getConfig();
           sendResponse({
             ok: true,

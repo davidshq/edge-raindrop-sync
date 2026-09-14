@@ -32,6 +32,15 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   (Options, bidirectional only) chooses whether missing Edge folders are created
   on pull (`create-as-needed`, default), skipped entirely (`existing-only`, no
   catch-all), or empty Raindrop collections are mirrored too (`mirror-all`).
+  Under **Folder policies**, expand **Choose Raindrop-only collections to sync**
+  to opt in specific Raindrop-only paths; an empty allowlist leaves those three
+  modes unchanged, while a non-empty allowlist limits Raindrop-only creates to
+  checked collections (Edge paths that already exist still sync). Use
+  **Clear selection** then **Save folder policies** to leave selective mode.
+  Stale allowlist entries are pruned on reconcile/Refresh once their Edge paths
+  exist (or the Raindrop collection is gone). Items stored directly in the
+  Raindrop root (not a child collection) are not listed for opt-in; they pull
+  when that Edge mirror folder already exists.
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
   Raindrop tags, notes, highlights, covers, and excerpts are never overwritten
   from Edge.
@@ -57,9 +66,9 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    root collection name / sync mode / default policy, then **Save settings**.
    In bidirectional mode, set **Raindrop → Edge folders** if you want Edge to
    stay folder-source-of-truth (`existing-only`) or to mirror empty Raindrop
-   collections (`mirror-all`). Folder policy overrides are edited as a draft —
-   use **Save folder policies** when you want them to take effect (including for
-   child folders via inheritance).
+   collections (`mirror-all`). Folder policy overrides and the Raindrop-only
+   allowlist are edited as a draft — use **Save folder policies** when you want
+   them to take effect (including child folders via inheritance).
 5. (Optional) Click **Run backfill now** to import existing Edge bookmarks.
 6. (Bidirectional) Click **Reconcile now** (or wait for the heartbeat) to pull
    Raindrop items into Edge.
@@ -85,6 +94,19 @@ RAINDROP_TOKEN=xxxxx npm run test:live
 Grow scenarios in those scripts when a bug surprises you; don’t add Vitest /
 Playwright until packaging for the store or multi-dev CI needs them.
 
+## Lint & format
+
+ESLint (flat config) + Prettier. Extension code uses `chrome` / WebExtension
+globals; `scripts/` is Node (verify scripts assign `globalThis.chrome` for mocks).
+
+```bash
+npm run lint          # ESLint
+npm run format        # Prettier write
+npm run format:check  # Prettier check (CI-friendly)
+```
+
+Config: `eslint.config.js`, `.prettierrc.json`, `.editorconfig`.
+
 ## Layout
 
 ```
@@ -93,14 +115,15 @@ src/
   background/
     service-worker.js      events + heartbeat + message API (holds no state)
   lib/
-    constants.js           policies, sync modes, storage keys, defaults
+    constants.js           policies, sync modes, MSG, storage keys, defaults
     store.js               chrome.storage.local (config, pairs, tombstones, status)
     queue.js               durable typed job queue with backoff
     mutex.js               in-process lock for storage RMW (queue/pairs/suppress)
     raindrop.js            Raindrop client (create/list/update/delete)
-    collections.js         ensure nested collection path (mirroring)
+    collections.js         collection index helpers + nested path mirroring
     bookmarks.js           chrome.bookmarks wrappers + shared mirror path placement
     policy.js              nearest-ancestor policy resolution
+    allowlist.js           Raindrop-only collection allowlist gate
     sync.js                drain engine (upload / pull / delete jobs)
     reconcile.js           Raindrop→Edge listing + remote-delete detection
     backfill.js            one-shot existing-bookmark sweep

@@ -18,7 +18,7 @@ export function withLock(fn) {
   // Keep the chain alive even when fn rejects so later callers are not stuck.
   tail = run.then(
     () => {},
-    () => {},
+    () => {}
   );
   return run;
 }

@@ -122,7 +122,7 @@ export class RaindropClient {
     const data = await this.request("GET", `/raindrops/${collectionId}?${params}`);
     return {
       items: data.items ?? [],
-      count: data.count ?? (data.items?.length ?? 0),
+      count: data.count ?? data.items?.length ?? 0,
     };
   }
 

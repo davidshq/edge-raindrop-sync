@@ -2,9 +2,8 @@
 //
 // Lists raindrops under the configured root (nested), enqueues pull-creates for
 // unmapped items, and enqueues Edge deletes when a mapped raindrop disappears.
-// Skips Raindrop file/document uploads (not useful as Edge bookmarks). Honors
-// tombstones, `exclude` folder policy, and raindropFolderMode (existing-only
-// skips missing Edge paths; mirror-all ensures empty collection folders).
+// Skips Raindrop file/document uploads. Honors tombstones, exclude, folder mode,
+// and raindropFolderAllowlist (non-empty ⇒ selective Raindrop-only sync).
 
 import { JOB, SYNC_MODE, RAINDROP_FOLDER_MODE } from "./constants.js";
 import {
@@ -14,6 +13,7 @@ import {
   hasTombstone,
   getReconcileState,
   setReconcileState,
+  setRaindropFolderAllowlist,
   appendLog,
   ensurePairsMigrated,
 } from "./store.js";
@@ -31,6 +31,12 @@ import {
   collectionPathFromRoot,
   collectionsUnderRoot,
 } from "./collections.js";
+import {
+  isAllowlistActive,
+  isCollectionAllowed,
+  canCreateRaindropOnlyPath,
+  pruneAllowlist,
+} from "./allowlist.js";
 import { RaindropClient } from "./raindrop.js";
 
 const PER_PAGE = 50;
@@ -93,8 +99,23 @@ async function reconcileOnce() {
   const overrides = await getOverrides();
   const topRoots = await getTopRoots();
   const folderMode = config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
+  let allowlist = config.raindropFolderAllowlist || {};
 
   try {
+    // Drop allowlist ids that no longer cover any Raindrop-only path so
+    // selective mode cannot stick after collections mirror or disappear.
+    const pruned = await pruneAllowlist(allowlist, index, root._id, (relative) =>
+      mirrorPathExists(relative, config.rootName, topRoots)
+    );
+    if (pruned.removed > 0) {
+      allowlist = pruned.allowlist;
+      await setRaindropFolderAllowlist(allowlist);
+      await appendLog(
+        "info",
+        `Pruned ${pruned.removed} stale Raindrop-only allowlist entr${pruned.removed === 1 ? "y" : "ies"}.`
+      );
+    }
+
     while (pages < MAX_PAGES_PER_TICK) {
       const { items, count } = await client.listRaindrops(root._id, {
         page,
@@ -111,7 +132,6 @@ async function reconcileOnce() {
         if (pairs.byRaindrop[rid]) continue;
 
         if (!item.link) continue;
-        // Uploaded files/docs still have a link (often up.raindrop.io) — skip them.
         if (item.type === "file" || item.type === "document") continue;
 
         const colId = item.collection?.$id ?? item.collection?.id;
@@ -120,22 +140,23 @@ async function reconcileOnce() {
 
         const relative = fullPath.slice(1);
         if (
-          await pathIsExcluded(
-            relative,
-            topRoots,
-            overrides,
-            config.defaultPolicy,
-            config.rootName,
-          )
+          await pathIsExcluded(relative, topRoots, overrides, config.defaultPolicy, config.rootName)
         ) {
           continue;
         }
 
-        // Best-effort: avoid queue churn; drain still authoritative for existing-only.
-        if (folderMode === RAINDROP_FOLDER_MODE.EXISTING_ONLY) {
-          if (!(await mirrorPathExists(relative, config.rootName, topRoots))) {
-            continue;
-          }
+        const edgeExists = await mirrorPathExists(relative, config.rootName, topRoots);
+        if (
+          !canCreateRaindropOnlyPath({
+            allowlist,
+            collectionId: colId,
+            index,
+            rootId: root._id,
+            edgePathExists: edgeExists,
+            folderMode,
+          })
+        ) {
+          continue;
         }
 
         const added = await queue.enqueueJob({
@@ -145,6 +166,7 @@ async function reconcileOnce() {
           link: item.link,
           title: item.title || item.link,
           relativeSegments: relative,
+          collectionId: colId != null ? String(colId) : null,
         });
         if (added) enqueued++;
       }
@@ -153,15 +175,15 @@ async function reconcileOnce() {
       const finished = items.length < PER_PAGE || fetched >= count;
       if (finished) {
         await finishDeleteDetection(seenIds, pairs);
-        if (folderMode === RAINDROP_FOLDER_MODE.MIRROR_ALL) {
-          await mirrorEmptyCollections(
-            index,
-            root._id,
-            config,
-            overrides,
-            topRoots,
-          );
-        }
+        await ensureAllowlistedOrMirrorAll(
+          index,
+          root._id,
+          config,
+          overrides,
+          topRoots,
+          folderMode,
+          allowlist
+        );
         await setReconcileState({
           running: false,
           cursorPage: 0,
@@ -222,19 +244,39 @@ async function finishDeleteDetection(seenIds, pairs) {
 }
 
 /**
- * Ensure Edge folders for every Raindrop collection under the root (including
- * empty ones). Does not create bookmarks. Honors exclude on existing ancestors.
+ * Empty-folder ensure: allowlisted collections always (when allowlist active);
+ * otherwise full mirror-all under root when mode is mirror-all.
  */
-async function mirrorEmptyCollections(index, rootId, config, overrides, topRoots) {
+async function ensureAllowlistedOrMirrorAll(
+  index,
+  rootId,
+  config,
+  overrides,
+  topRoots,
+  folderMode,
+  allowlist
+) {
+  const under = collectionsUnderRoot(index, rootId);
+  let targets;
+  if (isAllowlistActive(allowlist)) {
+    targets = under.filter(({ collectionId }) =>
+      isCollectionAllowed(collectionId, index, rootId, allowlist)
+    );
+  } else if (folderMode === RAINDROP_FOLDER_MODE.MIRROR_ALL) {
+    targets = under;
+  } else {
+    return;
+  }
+
   let ensured = 0;
-  for (const { relativeSegments } of collectionsUnderRoot(index, rootId)) {
+  for (const { relativeSegments } of targets) {
     if (
       await pathIsExcluded(
         relativeSegments,
         topRoots,
         overrides,
         config.defaultPolicy,
-        config.rootName,
+        config.rootName
       )
     ) {
       continue;
@@ -243,19 +285,12 @@ async function mirrorEmptyCollections(index, rootId, config, overrides, topRoots
     ensured++;
   }
   if (ensured > 0) {
-    await appendLog("info", `Mirror-all ensured ${ensured} Edge folder path(s).`);
+    const label = isAllowlistActive(allowlist) ? "Allowlist" : "Mirror-all";
+    await appendLog("info", `${label} ensured ${ensured} Edge folder path(s).`);
   }
 }
 
-/**
- * Whether the Edge path a pull would create for `relativeSegments` is exclude.
- * Uses the same placement plan as `resolveEdgeParentForMirror`.
- */
 async function pathIsExcluded(relativeSegments, topRoots, overrides, defaultPolicy, rootName) {
-  const ancestorIds = await ancestorIdsForMirrorPath(
-    relativeSegments,
-    rootName,
-    topRoots,
-  );
+  const ancestorIds = await ancestorIdsForMirrorPath(relativeSegments, rootName, topRoots);
   return isExcluded(ancestorIds, overrides, defaultPolicy);
 }

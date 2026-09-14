@@ -43,13 +43,21 @@ export const JOB = {
   DELETE_EDGE: "delete-edge",
 };
 
+// chrome.runtime message types (popup / options ↔ service worker).
+export const MSG = {
+  GET_STATUS: "getStatus",
+  RUN_BACKFILL: "runBackfill",
+  RECONCILE_NOW: "reconcileNow",
+  DRAIN_NOW: "drainNow",
+};
+
 // chrome.storage.local keys. Everything durable lives under these — the MV3
 // service worker holds no state across events.
 export const KEY = {
-  CONFIG: "config", // { token, rootName, defaultPolicy, pruneEmpty, syncMode, raindropFolderMode }
+  CONFIG: "config", // { token, rootName, defaultPolicy, pruneEmpty, syncMode, raindropFolderMode, raindropFolderAllowlist }
   OVERRIDES: "overrides", // { [bookmarkFolderId]: { policy, path } }
   QUEUE: "queue", // [ { id, kind, attempts, nextAttemptAt, ... } ]
-  DEDUP: "dedup", // legacy { [bookmarkId]: raindropId } — migrated into PAIRS
+  DEDUP: "dedup", // legacy { [bookmarkId]: raindropId } — read once into PAIRS, not dual-written
   PAIRS: "pairs", // { byBookmark: { [bookmarkId]: raindropId }, byRaindrop: { [raindropId]: bookmarkId } }
   TOMBSTONES: "tombstones", // { [raindropId]: { at, reason } }
   SUPPRESS: "suppress", // { removes: { [bookmarkId]: expiresAt }, creates: { [url]: expiresAt } }
@@ -66,6 +74,8 @@ export const DEFAULT_CONFIG = {
   pruneEmpty: false,
   syncMode: SYNC_MODE.ONE_WAY,
   raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+  /** @type {Record<string, { path: string }>} Raindrop collection ids opted in for Edge sync */
+  raindropFolderAllowlist: {},
 };
 
 // The alarm that drives the drain heartbeat even with no bookmark activity.

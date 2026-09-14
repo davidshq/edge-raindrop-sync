@@ -7,6 +7,7 @@
 //
 // Pair and suppress mutations share withLock with the queue so concurrent
 // drain / live-capture / reconcile cannot clobber each other's RMW updates.
+// Legacy DEDUP is migrated into PAIRS on first load; pair mutations write PAIRS only.
 
 import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS, POLICY, SYNC_MODE } from "./constants.js";
 import { withLock } from "./mutex.js";
@@ -29,11 +30,11 @@ async function write(key, value) {
 /** Force keep-both when bidirectional; folder Offload overrides still work. */
 export function normalizeConfig(config) {
   const next = { ...config };
-  if (
-    next.syncMode === SYNC_MODE.BIDIRECTIONAL &&
-    next.defaultPolicy !== POLICY.SYNC_KEEP
-  ) {
+  if (next.syncMode === SYNC_MODE.BIDIRECTIONAL && next.defaultPolicy !== POLICY.SYNC_KEEP) {
     next.defaultPolicy = POLICY.SYNC_KEEP;
+  }
+  if (!next.raindropFolderAllowlist || typeof next.raindropFolderAllowlist !== "object") {
+    next.raindropFolderAllowlist = {};
   }
   return next;
 }
@@ -57,6 +58,16 @@ export async function setConfig(patch) {
   const next = normalizeConfig({ ...(await getConfig()), ...patch });
   await write(KEY.CONFIG, next);
   return next;
+}
+
+/** Raindrop-only collection allowlist (drafted with folder policies in Options). */
+export async function getRaindropFolderAllowlist() {
+  const config = await getConfig();
+  return { ...(config.raindropFolderAllowlist || {}) };
+}
+
+export async function setRaindropFolderAllowlist(allowlist) {
+  return setConfig({ raindropFolderAllowlist: allowlist ?? {} });
 }
 
 /* ---- per-folder policy overrides (keyed by bookmark folder id) ---- */
@@ -105,7 +116,7 @@ async function loadPairsUnlocked() {
   return pairs;
 }
 
-/** Migrate legacy DEDUP map into PAIRS once, then keep PAIRS authoritative. */
+/** Migrate legacy DEDUP map into PAIRS once, then keep PAIRS authoritative (no dual-write). */
 export async function ensurePairsMigrated() {
   return withLock(() => loadPairsUnlocked());
 }
@@ -141,10 +152,6 @@ export async function recordSynced(bookmarkId, raindropId) {
     pairs.byBookmark[bookmarkId] = rid;
     pairs.byRaindrop[rid] = bookmarkId;
     await write(KEY.PAIRS, pairs);
-    // Keep legacy dedup in sync for any external readers / older status tooling.
-    const dedup = await read(KEY.DEDUP, {});
-    dedup[bookmarkId] = raindropId;
-    await write(KEY.DEDUP, dedup);
   });
 }
 
@@ -155,9 +162,6 @@ export async function forgetSynced(bookmarkId) {
     if (rid != null) delete pairs.byRaindrop[String(rid)];
     delete pairs.byBookmark[bookmarkId];
     await write(KEY.PAIRS, pairs);
-    const dedup = await read(KEY.DEDUP, {});
-    delete dedup[bookmarkId];
-    await write(KEY.DEDUP, dedup);
   });
 }
 
@@ -169,11 +173,6 @@ export async function forgetPairByRaindrop(raindropId) {
     if (bookmarkId != null) delete pairs.byBookmark[bookmarkId];
     delete pairs.byRaindrop[rid];
     await write(KEY.PAIRS, pairs);
-    if (bookmarkId != null) {
-      const dedup = await read(KEY.DEDUP, {});
-      delete dedup[bookmarkId];
-      await write(KEY.DEDUP, dedup);
-    }
     return bookmarkId ?? null;
   });
 }
@@ -231,58 +230,53 @@ function sweepExpired(map, now) {
   }
 }
 
-export async function suppressRemove(bookmarkId) {
+/** Record a suppression expiry under `bucket` (`removes` | `creates`). */
+async function suppressKey(bucket, key) {
   return withLock(async () => {
     const suppress = await getSuppress();
     const now = Date.now();
-    sweepExpired(suppress.removes, now);
-    suppress.removes[bookmarkId] = now + SUPPRESS_MS;
+    sweepExpired(suppress[bucket], now);
+    suppress[bucket][key] = now + SUPPRESS_MS;
     await writeSuppress(suppress);
   });
 }
 
-export async function consumeRemoveSuppression(bookmarkId) {
+/**
+ * Consume a suppression under `bucket`. Returns true if it was still valid.
+ * Always persists after sweep so expired entries are cleaned up.
+ */
+async function consumeKey(bucket, key) {
   return withLock(async () => {
     const suppress = await getSuppress();
     const now = Date.now();
-    sweepExpired(suppress.removes, now);
-    const expiresAt = suppress.removes[bookmarkId];
+    sweepExpired(suppress[bucket], now);
+    const expiresAt = suppress[bucket][key];
     if (expiresAt == null) {
       await writeSuppress(suppress);
       return false;
     }
-    delete suppress.removes[bookmarkId];
+    delete suppress[bucket][key];
     await writeSuppress(suppress);
     return expiresAt > now;
   });
+}
+
+export async function suppressRemove(bookmarkId) {
+  return suppressKey("removes", bookmarkId);
+}
+
+export async function consumeRemoveSuppression(bookmarkId) {
+  return consumeKey("removes", bookmarkId);
 }
 
 export async function suppressCreate(url) {
   if (!url) return;
-  return withLock(async () => {
-    const suppress = await getSuppress();
-    const now = Date.now();
-    sweepExpired(suppress.creates, now);
-    suppress.creates[url] = now + SUPPRESS_MS;
-    await writeSuppress(suppress);
-  });
+  return suppressKey("creates", url);
 }
 
 export async function consumeCreateSuppression(url) {
   if (!url) return false;
-  return withLock(async () => {
-    const suppress = await getSuppress();
-    const now = Date.now();
-    sweepExpired(suppress.creates, now);
-    const expiresAt = suppress.creates[url];
-    if (expiresAt == null) {
-      await writeSuppress(suppress);
-      return false;
-    }
-    delete suppress.creates[url];
-    await writeSuppress(suppress);
-    return expiresAt > now;
-  });
+  return consumeKey("creates", url);
 }
 
 /* ---- reconcile progress ---- */
