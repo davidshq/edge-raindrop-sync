@@ -28,7 +28,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   bookmarks (link/article style items only — uploaded files/documents are skipped);
   deleting on either side removes the pair (with tombstones so items don't
   resurrect). Stale `pull-create` jobs also bail if a tombstone exists or a
-  delete for that raindrop is already queued.
+  delete for that raindrop is already queued. **Raindrop → Edge folders**
+  (Options, bidirectional only) chooses whether missing Edge folders are created
+  on pull (`create-as-needed`, default), skipped entirely (`existing-only`, no
+  catch-all), or empty Raindrop collections are mirrored too (`mirror-all`).
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
   Raindrop tags, notes, highlights, covers, and excerpts are never overwritten
   from Edge.
@@ -52,8 +55,11 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    - **Load unpacked** → select the `src/` folder
 4. Open the extension's **Options**, paste your token, click **Test**, set the
    root collection name / sync mode / default policy, then **Save settings**.
-   Folder policy overrides are edited as a draft — use **Save folder policies**
-   when you want them to take effect (including for child folders via inheritance).
+   In bidirectional mode, set **Raindrop → Edge folders** if you want Edge to
+   stay folder-source-of-truth (`existing-only`) or to mirror empty Raindrop
+   collections (`mirror-all`). Folder policy overrides are edited as a draft —
+   use **Save folder policies** when you want them to take effect (including for
+   child folders via inheritance).
 5. (Optional) Click **Run backfill now** to import existing Edge bookmarks.
 6. (Bidirectional) Click **Reconcile now** (or wait for the heartbeat) to pull
    Raindrop items into Edge.
@@ -117,6 +123,7 @@ scripts/
   **Offload** (`sync-and-delete`) still means “remove from Edge after upload”
   and leaves Raindrop intact (with all rich metadata). The options UI does not
   offer offload as the bidirectional *global* default — that mode keeps both
-  sides by default.
+  sides by default. Stale stored `sync-and-delete` under bidirectional is
+  coerced to keep-both on read/save so the engine matches the UI.
 - **Out of scope for now:** re-syncing title/URL/moves via `onChanged`/`onMoved`,
   OAuth, and publishing to the Edge Add-ons store.

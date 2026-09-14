@@ -8,7 +8,7 @@
 // Pair and suppress mutations share withLock with the queue so concurrent
 // drain / live-capture / reconcile cannot clobber each other's RMW updates.
 
-import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS } from "./constants.js";
+import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS, POLICY, SYNC_MODE } from "./constants.js";
 import { withLock } from "./mutex.js";
 
 async function read(key, fallback) {
@@ -21,14 +21,40 @@ async function write(key, value) {
 }
 
 /* ---- config ---- */
+// getConfig merges DEFAULT_CONFIG so new fields (e.g. raindropFolderMode) appear
+// on older installs without a dedicated migration.
+// Bidirectional always keeps both sides globally; stale sync-and-delete is
+// coerced (and healed in storage) so Options copy and the engine agree.
+
+/** Force keep-both when bidirectional; folder Offload overrides still work. */
+export function normalizeConfig(config) {
+  const next = { ...config };
+  if (
+    next.syncMode === SYNC_MODE.BIDIRECTIONAL &&
+    next.defaultPolicy !== POLICY.SYNC_KEEP
+  ) {
+    next.defaultPolicy = POLICY.SYNC_KEEP;
+  }
+  return next;
+}
 
 export async function getConfig() {
   const stored = await read(KEY.CONFIG, {});
-  return { ...DEFAULT_CONFIG, ...stored };
+  const merged = { ...DEFAULT_CONFIG, ...stored };
+  const config = normalizeConfig(merged);
+  // Heal stale installs that enabled bidirectional before save coerced policy.
+  if (
+    stored.syncMode === SYNC_MODE.BIDIRECTIONAL &&
+    stored.defaultPolicy &&
+    stored.defaultPolicy !== POLICY.SYNC_KEEP
+  ) {
+    await write(KEY.CONFIG, config);
+  }
+  return config;
 }
 
 export async function setConfig(patch) {
-  const next = { ...(await getConfig()), ...patch };
+  const next = normalizeConfig({ ...(await getConfig()), ...patch });
   await write(KEY.CONFIG, next);
   return next;
 }

@@ -5,7 +5,7 @@
 // deletion. Policy-driven Edge cleanup never cascades into a Raindrop delete.
 // Effective `exclude` blocks upload, ingest, and delete propagation both ways.
 
-import { POLICY, JOB, SYNC_MODE } from "./constants.js";
+import { POLICY, JOB, SYNC_MODE, RAINDROP_FOLDER_MODE } from "./constants.js";
 import {
   getConfig,
   getOverrides,
@@ -37,6 +37,7 @@ import {
   resolveLocation,
   createBookmark,
   resolveEdgeParentForMirror,
+  mirrorPathExists,
   ancestorIdsFromFolder,
 } from "./bookmarks.js";
 import { resolvePolicy, isExcluded } from "./policy.js";
@@ -240,11 +241,22 @@ async function processPullCreate(job, ctx) {
     return;
   }
 
+  const relative = job.relativeSegments || [];
+  const folderMode = config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
+  // existing-only: never create folders or a catch-all; drop the job if path missing.
+  if (folderMode === RAINDROP_FOLDER_MODE.EXISTING_ONLY) {
+    if (!(await mirrorPathExists(relative, config.rootName))) {
+      await queue.remove(job.id);
+      const pathLabel = relative.length ? relative.join("/") : "(root)";
+      await appendLog("info", `Skipped pull: path not in Edge (${pathLabel}).`);
+      return;
+    }
+  }
+
   await suppressCreate(job.link);
-  const parentId = await resolveEdgeParentForMirror(
-    job.relativeSegments || [],
-    config.rootName,
-  );
+  // create-as-needed / mirror-all: ensure-if-missing. existing-only reaches here
+  // only when the full path already exists (ensure is a no-op create).
+  const parentId = await resolveEdgeParentForMirror(relative, config.rootName);
   const node = await createBookmark({
     parentId,
     title: job.title || job.link,

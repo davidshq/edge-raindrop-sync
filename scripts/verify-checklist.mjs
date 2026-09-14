@@ -494,12 +494,15 @@ async function scenario64_syncAndDelete() {
   patchClient(eng.raindropMod, mock);
 
   const rootName = "ERS-Verify-SAD";
+  // Global default must stay keep-both in bidirectional; offload via folder override.
   await eng.store.setConfig({
     token: "mock",
     rootName,
     syncMode: SYNC_MODE.BIDIRECTIONAL,
-    defaultPolicy: POLICY.SYNC_DELETE,
+    defaultPolicy: POLICY.SYNC_DELETE, // coerced to SYNC_KEEP on write
   });
+  const cfg = await eng.store.getConfig();
+  assert.equal(cfg.defaultPolicy, POLICY.SYNC_KEEP, "bidirectional coerces global keep-both");
 
   // Pre-create root so upload path works
   await mock.createCollection(rootName, null);
@@ -508,6 +511,11 @@ async function scenario64_syncAndDelete() {
     parentId: "1",
     title: "ERS-Verify-SAD-Folder",
   });
+  await eng.store.setOverride(
+    folder.id,
+    POLICY.SYNC_DELETE,
+    "Favorites bar / ERS-Verify-SAD-Folder",
+  );
   const bm = await chrome.bookmarks.create({
     parentId: folder.id,
     title: "ERS sad",
@@ -530,7 +538,20 @@ async function scenario64_syncAndDelete() {
   assert.equal(only.note, "user-note");
   assert.equal(mock._trash.size, 0, "not trashed by policy delete");
 
-  console.log("  ✔ Edge gone; Raindrop kept with tags/notes");
+  // Stale storage heal: raw sync-and-delete under bidirectional is fixed on read
+  await chrome.storage.local.set({
+    config: {
+      token: "mock",
+      rootName,
+      syncMode: SYNC_MODE.BIDIRECTIONAL,
+      defaultPolicy: POLICY.SYNC_DELETE,
+      pruneEmpty: false,
+    },
+  });
+  const healed = await eng.store.getConfig();
+  assert.equal(healed.defaultPolicy, POLICY.SYNC_KEEP, "getConfig heals stale offload");
+
+  console.log("  ✔ Edge gone via folder offload; Raindrop kept; stale global coerced");
 }
 
 async function scenario65_exclude() {
@@ -650,6 +671,116 @@ async function scenario65_exclude() {
   );
 }
 
+async function scenario66_raindropFolderModes() {
+  console.log("\n== 6.6 Raindrop → Edge folder modes ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE, JOB } = eng.constants;
+  await resetAll(eng.store);
+  const mock = makeMockRaindrop();
+  patchClient(eng.raindropMod, mock);
+
+  const rootName = "ERS-Verify-Folders";
+  const root = await mock.createCollection(rootName, null);
+  const research = await mock.createCollection("Research", root._id);
+  const papers = await mock.createCollection("Papers", research._id);
+  // Empty sibling collection — only mirror-all should create it in Edge.
+  await mock.createCollection("Inbox", research._id);
+
+  mock._seedRich(papers._id, {
+    link: "https://example.com/ers-verify-papers",
+    title: "ERS papers",
+  });
+
+  // --- existing-only: missing path → skip (no catch-all, no folders) ---
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-papers"),
+    false,
+    "existing-only skips missing path",
+  );
+  assert.equal(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Research"),
+    false,
+    "existing-only creates no Research folder",
+  );
+  assert.equal(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "_Unfiled"),
+    false,
+    "no catch-all / _Unfiled",
+  );
+
+  // Stale pull job still dropped at drain without creating folders
+  await eng.queue.enqueueJob({
+    id: "pull-stale-existing",
+    kind: JOB.PULL_CREATE,
+    raindropId: "stale-ex",
+    link: "https://example.com/ers-verify-stale-existing",
+    title: "stale",
+    relativeSegments: ["Research", "Papers"],
+  });
+  await eng.sync.drain();
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-stale-existing"),
+    false,
+    "drain existing-only drops incomplete path",
+  );
+
+  // --- create-as-needed: folders + bookmark; empty Inbox still absent ---
+  await resetAll(eng.store);
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+  });
+  // Mock Raindrop tree from earlier in this scenario is reused.
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  const pulled = findEdgeByUrl("https://example.com/ers-verify-papers");
+  assert.ok(pulled, "create-as-needed pulled bookmark");
+  assert.ok(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Research"),
+    "create-as-needed created Research",
+  );
+  assert.ok(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Papers"),
+    "create-as-needed created Papers",
+  );
+  assert.equal(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Inbox"),
+    false,
+    "create-as-needed does not mirror empty Inbox",
+  );
+
+  // --- mirror-all: empty Inbox folder appears ---
+  await resetAll(eng.store);
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.MIRROR_ALL,
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.ok(findEdgeByUrl("https://example.com/ers-verify-papers"), "mirror-all still pulls");
+  assert.ok(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "Inbox"),
+    "mirror-all ensures empty Inbox folder",
+  );
+
+  console.log("  ✔ existing-only skip; create-as-needed; mirror-all empty folders");
+}
+
 async function optionalLiveSmoke() {
   if (!USE_LIVE) {
     console.log("\n== Live Raindrop smoke skipped (pass --live with token for API check) ==");
@@ -703,6 +834,7 @@ async function main() {
   await scenario63_bidirectional();
   await scenario64_syncAndDelete();
   await scenario65_exclude();
+  await scenario66_raindropFolderModes();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

@@ -65,6 +65,25 @@ export function collectionIdAlive(index, id) {
 }
 
 /**
+ * Every collection under `rootId` (including the root), with relative segments
+ * (root title stripped). Dedupes by `_id` because the index stores dual keys.
+ * @returns {{ collectionId: number|string, relativeSegments: string[] }[]}
+ */
+export function collectionsUnderRoot(index, rootId) {
+  if (!index?.byId) return [];
+  const seen = new Set();
+  const out = [];
+  for (const col of index.byId.values()) {
+    if (!col || seen.has(col._id)) continue;
+    seen.add(col._id);
+    const full = collectionPathFromRoot(index, col._id, rootId);
+    if (!full.length) continue;
+    out.push({ collectionId: col._id, relativeSegments: full.slice(1) });
+  }
+  return out;
+}
+
+/**
  * Ensure every collection along `fullSegments` exists (e.g.
  * ["Edge", "Favorites bar", "Work"]) and return the deepest collection's id.
  *

@@ -21,6 +21,20 @@ export const SYNC_MODE = {
 
 export const ALL_SYNC_MODES = [SYNC_MODE.ONE_WAY, SYNC_MODE.BIDIRECTIONAL];
 
+// Bidirectional only: whether Raindrop collection paths may create Edge folders.
+// Ignored when syncMode is one-way. Default create-as-needed matches historical pull.
+export const RAINDROP_FOLDER_MODE = {
+  EXISTING_ONLY: "existing-only",
+  CREATE_AS_NEEDED: "create-as-needed",
+  MIRROR_ALL: "mirror-all",
+};
+
+export const ALL_RAINDROP_FOLDER_MODES = [
+  RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+  RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+  RAINDROP_FOLDER_MODE.MIRROR_ALL,
+];
+
 // Durable queue job kinds. Legacy jobs without `kind` are treated as upload.
 export const JOB = {
   UPLOAD: "upload",
@@ -32,7 +46,7 @@ export const JOB = {
 // chrome.storage.local keys. Everything durable lives under these — the MV3
 // service worker holds no state across events.
 export const KEY = {
-  CONFIG: "config", // { token, rootName, defaultPolicy, pruneEmpty, syncMode }
+  CONFIG: "config", // { token, rootName, defaultPolicy, pruneEmpty, syncMode, raindropFolderMode }
   OVERRIDES: "overrides", // { [bookmarkFolderId]: { policy, path } }
   QUEUE: "queue", // [ { id, kind, attempts, nextAttemptAt, ... } ]
   DEDUP: "dedup", // legacy { [bookmarkId]: raindropId } — migrated into PAIRS
@@ -51,6 +65,7 @@ export const DEFAULT_CONFIG = {
   defaultPolicy: POLICY.SYNC_DELETE,
   pruneEmpty: false,
   syncMode: SYNC_MODE.ONE_WAY,
+  raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
 };
 
 // The alarm that drives the drain heartbeat even with no bookmark activity.

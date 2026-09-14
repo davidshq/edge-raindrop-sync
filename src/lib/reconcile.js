@@ -3,10 +3,10 @@
 // Lists raindrops under the configured root (nested), enqueues pull-creates for
 // unmapped items, and enqueues Edge deletes when a mapped raindrop disappears.
 // Skips Raindrop file/document uploads (not useful as Edge bookmarks). Honors
-// tombstones and `exclude` folder policy. Auth/rate-limit errors bubble to the
-// drain so deletions stay halted consistently.
+// tombstones, `exclude` folder policy, and raindropFolderMode (existing-only
+// skips missing Edge paths; mirror-all ensures empty collection folders).
 
-import { JOB, SYNC_MODE } from "./constants.js";
+import { JOB, SYNC_MODE, RAINDROP_FOLDER_MODE } from "./constants.js";
 import {
   getConfig,
   getOverrides,
@@ -19,11 +19,17 @@ import {
 } from "./store.js";
 import * as queue from "./queue.js";
 import { isExcluded } from "./policy.js";
-import { getTopRoots, ancestorIdsForMirrorPath } from "./bookmarks.js";
+import {
+  getTopRoots,
+  ancestorIdsForMirrorPath,
+  mirrorPathExists,
+  ensureMirrorFolderPath,
+} from "./bookmarks.js";
 import {
   buildCollectionIndex,
   findRootCollection,
   collectionPathFromRoot,
+  collectionsUnderRoot,
 } from "./collections.js";
 import { RaindropClient } from "./raindrop.js";
 
@@ -86,6 +92,7 @@ async function reconcileOnce() {
   const pairs = await getPairs();
   const overrides = await getOverrides();
   const topRoots = await getTopRoots();
+  const folderMode = config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
 
   try {
     while (pages < MAX_PAGES_PER_TICK) {
@@ -124,6 +131,13 @@ async function reconcileOnce() {
           continue;
         }
 
+        // Best-effort: avoid queue churn; drain still authoritative for existing-only.
+        if (folderMode === RAINDROP_FOLDER_MODE.EXISTING_ONLY) {
+          if (!(await mirrorPathExists(relative, config.rootName, topRoots))) {
+            continue;
+          }
+        }
+
         const added = await queue.enqueueJob({
           id: `pull-${rid}`,
           kind: JOB.PULL_CREATE,
@@ -139,6 +153,15 @@ async function reconcileOnce() {
       const finished = items.length < PER_PAGE || fetched >= count;
       if (finished) {
         await finishDeleteDetection(seenIds, pairs);
+        if (folderMode === RAINDROP_FOLDER_MODE.MIRROR_ALL) {
+          await mirrorEmptyCollections(
+            index,
+            root._id,
+            config,
+            overrides,
+            topRoots,
+          );
+        }
         await setReconcileState({
           running: false,
           cursorPage: 0,
@@ -195,6 +218,32 @@ async function finishDeleteDetection(seenIds, pairs) {
   }
   if (deleteJobs > 0) {
     await appendLog("info", `Reconcile queued ${deleteJobs} Edge delete(s) for missing raindrops.`);
+  }
+}
+
+/**
+ * Ensure Edge folders for every Raindrop collection under the root (including
+ * empty ones). Does not create bookmarks. Honors exclude on existing ancestors.
+ */
+async function mirrorEmptyCollections(index, rootId, config, overrides, topRoots) {
+  let ensured = 0;
+  for (const { relativeSegments } of collectionsUnderRoot(index, rootId)) {
+    if (
+      await pathIsExcluded(
+        relativeSegments,
+        topRoots,
+        overrides,
+        config.defaultPolicy,
+        config.rootName,
+      )
+    ) {
+      continue;
+    }
+    await ensureMirrorFolderPath(relativeSegments, config.rootName, topRoots);
+    ensured++;
+  }
+  if (ensured > 0) {
+    await appendLog("info", `Mirror-all ensured ${ensured} Edge folder path(s).`);
   }
 }
 

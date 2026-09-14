@@ -84,6 +84,27 @@
             <strong>Offload (delete from Edge)</strong> for folders you still
             want cleared locally after upload.
           </p>
+          <label>
+            Raindrop → Edge folders
+            <select id="raindropFolderMode">
+              <option value="existing-only">Existing Edge folders only</option>
+              <option value="create-as-needed">Create folders as needed</option>
+              <option value="mirror-all">Mirror all collections (incl. empty)</option>
+            </select>
+          </label>
+          <p id="folderModeHelpExisting" class="field-help hint hidden">
+            Pull bookmarks only into folder paths that already exist in Edge.
+            Raindrop-only paths are skipped entirely (no catch-all folder).
+          </p>
+          <p id="folderModeHelpCreate" class="field-help hint hidden">
+            When pulling a bookmark, create missing Edge folders along its
+            collection path. Empty Raindrop collections stay invisible in Edge.
+            Unrecognized paths land under Other favorites / root name.
+          </p>
+          <p id="folderModeHelpMirror" class="field-help hint hidden">
+            Like create-as-needed, and also create Edge folders for empty
+            Raindrop collections under your root so the tree shapes match.
+          </p>
         </div>
 
         <label class="checkbox">

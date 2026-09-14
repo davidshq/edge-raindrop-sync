@@ -2,7 +2,8 @@
 //
 // Mirror placement (Raindrop relative path → Edge parent) lives in
 // resolveMirrorPlacement / resolveEdgeParentForMirror / ancestorIdsForMirrorPath
-// so pull-create and exclude checks cannot drift.
+// / mirrorPathExists / ensureMirrorFolderPath so pull-create, existing-only skip,
+// mirror-all empty folders, and exclude checks cannot drift.
 //
 // Live Edge folder ancestry (resolveLocation / ancestorIdsFromFolder) shares
 // walkAncestorsFromFolder so upload policy and delete-propagation exclude gates
@@ -107,9 +108,41 @@ export async function resolveMirrorPlacement(relativeSegments, rootName, topRoot
 }
 
 /** Create (as needed) the Edge parent folder for a Raindrop-mirrored path. */
-export async function resolveEdgeParentForMirror(relativeSegments, rootName) {
-  const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName);
+export async function resolveEdgeParentForMirror(relativeSegments, rootName, topRoots) {
+  const { startId, titles } = await resolveMirrorPlacement(
+    relativeSegments,
+    rootName,
+    topRoots,
+  );
   return ensureFolderPath(startId, titles);
+}
+
+/**
+ * True when every folder title in the mirror placement already exists in Edge.
+ * Does not create folders — used by existing-only mode (reconcile + pull-create).
+ */
+export async function mirrorPathExists(relativeSegments, rootName, topRoots) {
+  const { startId, titles } = await resolveMirrorPlacement(
+    relativeSegments,
+    rootName,
+    topRoots,
+  );
+  let parentId = startId;
+  for (const title of titles) {
+    const children = await getChildren(parentId);
+    const folder = children.find((c) => !c.url && (c.title || "") === title);
+    if (!folder) return false;
+    parentId = folder.id;
+  }
+  return true;
+}
+
+/**
+ * Ensure the Edge folder path for a Raindrop-relative collection (no bookmark).
+ * Used by mirror-all empty-collection mirroring.
+ */
+export async function ensureMirrorFolderPath(relativeSegments, rootName, topRoots) {
+  return resolveEdgeParentForMirror(relativeSegments, rootName, topRoots);
 }
 
 /**

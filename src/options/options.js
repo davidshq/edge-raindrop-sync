@@ -4,7 +4,7 @@
 // Folder-policy edits are held in a draft until "Save folder policies" so a
 // parent change cannot surprise-apply to children mid-edit.
 
-import { ALL_POLICIES, POLICY, SYNC_MODE } from "../lib/constants.js";
+import { ALL_POLICIES, POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE } from "../lib/constants.js";
 import { getConfig, setConfig, getOverrides, setOverrides } from "../lib/store.js";
 import { getTree } from "../lib/bookmarks.js";
 import { RaindropClient } from "../lib/raindrop.js";
@@ -32,6 +32,7 @@ let oneWayPolicyMemory = POLICY.SYNC_DELETE;
 /**
  * Bidirectional implies keep-both globally. One-way shows the after-upload
  * policy control. Folder overrides may still offload or exclude subtrees.
+ * Raindrop→Edge folders select is bidirectional-only.
  */
 function updateSyncModeUi(mode) {
   const bi = mode === SYNC_MODE.BIDIRECTIONAL;
@@ -45,9 +46,26 @@ function updateSyncModeUi(mode) {
 
   if (bi) {
     $("defaultPolicy").value = POLICY.SYNC_KEEP;
+    updateFolderModeHelp($("raindropFolderMode").value);
   } else {
     $("defaultPolicy").value = oneWayPolicyMemory;
   }
+}
+
+function updateFolderModeHelp(mode) {
+  const m = mode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
+  $("folderModeHelpExisting").classList.toggle(
+    "hidden",
+    m !== RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+  );
+  $("folderModeHelpCreate").classList.toggle(
+    "hidden",
+    m !== RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+  );
+  $("folderModeHelpMirror").classList.toggle(
+    "hidden",
+    m !== RAINDROP_FOLDER_MODE.MIRROR_ALL,
+  );
 }
 
 function effectiveDefaultPolicy(syncMode) {
@@ -62,6 +80,8 @@ async function loadSettings() {
   $("syncMode").value = config.syncMode || SYNC_MODE.ONE_WAY;
   $("defaultPolicy").value = config.defaultPolicy;
   $("pruneEmpty").checked = !!config.pruneEmpty;
+  $("raindropFolderMode").value =
+    config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
 
   const mode = $("syncMode").value;
   if (mode === SYNC_MODE.ONE_WAY) {
@@ -89,6 +109,8 @@ async function saveSettings() {
     syncMode,
     defaultPolicy,
     pruneEmpty: $("pruneEmpty").checked,
+    raindropFolderMode:
+      $("raindropFolderMode").value || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
   });
   updateSyncModeUi(syncMode);
   $("saveStatus").textContent = "Saved.";
@@ -329,6 +351,9 @@ $("syncMode").addEventListener("change", () => {
     oneWayPolicyMemory = $("defaultPolicy").value || oneWayPolicyMemory;
   }
   updateSyncModeUi(mode);
+});
+$("raindropFolderMode").addEventListener("change", () => {
+  updateFolderModeHelp($("raindropFolderMode").value);
 });
 $("defaultPolicy").addEventListener("change", () => {
   if ($("syncMode").value === SYNC_MODE.ONE_WAY) {
