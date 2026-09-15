@@ -10,6 +10,8 @@
 // Index maps store dual keys (id + String(id)); use getById / getByParent so
 // call sites never miss a collection due to number/string mismatch.
 
+import { OUTSIDE_ROOT_MIRROR_FOLDER } from "./constants.js";
+
 const ROOT = "root"; // sentinel parent key for top-level collections
 
 /**
@@ -102,6 +104,90 @@ export function collectionsUnderRoot(index, rootId) {
     const full = collectionPathFromRoot(index, col._id, rootId);
     if (!full.length) continue;
     out.push({ collectionId: col._id, relativeSegments: full.slice(1) });
+  }
+  return out;
+}
+
+/**
+ * Titles from the Raindrop top-level collection down to `collectionId`.
+ * @returns {string[]} empty if id missing
+ */
+export function collectionAbsolutePath(index, collectionId) {
+  const titles = [];
+  let current = getById(index, collectionId);
+  const seen = new Set();
+  while (current) {
+    if (seen.has(current._id)) return [];
+    seen.add(current._id);
+    titles.unshift(current.title || "");
+    const parentId = current.parent?.$id;
+    if (parentId == null) return titles;
+    current = getById(index, parentId);
+  }
+  return [];
+}
+
+/**
+ * Edge mirror relative segments for a Raindrop collection.
+ * Under the sync root → path with root title stripped (today's layout).
+ * Outside the sync root → `Raindrop / …` absolute path so placement nests under
+ * Other favorites / Raindrop and never attaches to an Edge top whose title
+ * matches a Raindrop top-level collection (e.g. "Favorites bar").
+ * @returns {string[]|null} null if collection unknown
+ */
+export function mirrorRelativeSegments(index, collectionId, syncRootId) {
+  const under = collectionPathFromRoot(index, collectionId, syncRootId);
+  if (under.length) return under.slice(1);
+  const absolute = collectionAbsolutePath(index, collectionId);
+  if (!absolute.length) return null;
+  return [OUTSIDE_ROOT_MIRROR_FOLDER, ...absolute];
+}
+
+/**
+ * Map Edge folder segments (from resolveLocation) to a Raindrop collection path
+ * for upload via ensureCollectionPath.
+ *
+ * Normal Edge paths nest under the sync root: `[rootName, ...segments]`.
+ * The outside-root landing zone `Other favorites / Raindrop / <rest>` maps to
+ * account-level collections `<rest>` so drops round-trip to the original
+ * outside-root collection instead of creating Edge/Other favorites/Raindrop/….
+ * A bare Raindrop container (no `<rest>`) falls back to the under-root path.
+ *
+ * @param {string[]} edgeSegments
+ * @param {string} rootName
+ * @returns {string[]}
+ */
+export function raindropUploadSegments(edgeSegments, rootName) {
+  const segs = edgeSegments || [];
+  if (
+    segs.length >= 2 &&
+    /other/i.test(segs[0] || "") &&
+    (segs[1] || "").toLowerCase() === OUTSIDE_ROOT_MIRROR_FOLDER.toLowerCase()
+  ) {
+    const rest = segs.slice(2);
+    if (rest.length) return rest;
+  }
+  return [rootName, ...segs];
+}
+
+/**
+ * All Raindrop collections for the allowlist picker / prune / ensure.
+ * Skips the bare sync-root collection. `underSyncRoot` marks membership.
+ * @returns {{ collectionId: number|string, relativeSegments: string[], underSyncRoot: boolean }[]}
+ */
+export function collectionsForAllowlistPicker(index, syncRootId) {
+  if (!index?.byId) return [];
+  const seen = new Set();
+  const out = [];
+  for (const col of index.byId.values()) {
+    if (!col || seen.has(col._id)) continue;
+    seen.add(col._id);
+    if (syncRootId != null && String(col._id) === String(syncRootId)) continue;
+    const relative = mirrorRelativeSegments(index, col._id, syncRootId);
+    if (!relative) continue;
+    const underSyncRoot =
+      syncRootId != null && collectionPathFromRoot(index, col._id, syncRootId).length > 0;
+    out.push({ collectionId: col._id, relativeSegments: relative, underSyncRoot });
   }
   return out;
 }

@@ -6,15 +6,29 @@
 //
 // Two error types let the drain react correctly:
 //   AuthError      -> token bad/expired: halt deletions, keep jobs queued.
-//   RateLimitError -> HTTP 429: back off until `retryAt`, keep jobs queued.
+//   RateLimitError -> HTTP 429 *or* remaining budget exhausted: back off until
+//                     `retryAt`, keep jobs queued. Prefer pausing before 429.
 
-import { RAINDROP_API, RATE_LIMIT_FALLBACK_MS } from "./constants.js";
+import {
+  RAINDROP_API,
+  RATE_LIMIT_FALLBACK_MS,
+  RATE_LIMIT_RESERVE,
+} from "./constants.js";
 
 export class AuthError extends Error {}
 export class RateLimitError extends Error {
-  constructor(retryAt) {
-    super("Raindrop rate limit (HTTP 429)");
+  /**
+   * @param {number} retryAt epoch ms when Raindrop work may resume
+   * @param {{ proactive?: boolean }} [opts]
+   */
+  constructor(retryAt, { proactive = false } = {}) {
+    super(
+      proactive
+        ? "Raindrop rate limit budget low; pausing before 429"
+        : "Raindrop rate limit (HTTP 429)"
+    );
     this.retryAt = retryAt;
+    this.proactive = proactive;
   }
 }
 export class RaindropError extends Error {}
@@ -22,6 +36,24 @@ export class RaindropError extends Error {}
 export class RaindropClient {
   constructor(token) {
     this.token = token;
+    /** @type {number|null} */
+    this._remaining = null;
+    /** @type {number|null} epoch ms from X-RateLimit-Reset */
+    this._resetAt = null;
+  }
+
+  /**
+   * True when the last response left little quota — callers should stop the
+   * current tick and wait for `pauseUntil()` rather than risk a hard 429.
+   */
+  shouldPause() {
+    return this._remaining != null && this._remaining <= RATE_LIMIT_RESERVE;
+  }
+
+  /** Epoch ms to wait until after a soft (header) pause. */
+  pauseUntil() {
+    if (this._resetAt != null && this._resetAt > Date.now()) return this._resetAt;
+    return Date.now() + RATE_LIMIT_FALLBACK_MS;
   }
 
   async request(method, path, body) {
@@ -33,6 +65,8 @@ export class RaindropClient {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+
+    this.#noteRateHeaders(res);
 
     if (res.status === 401 || res.status === 403) {
       throw new AuthError(`Raindrop rejected the token (HTTP ${res.status})`);
@@ -55,6 +89,19 @@ export class RaindropClient {
     }
   }
 
+  #noteRateHeaders(res) {
+    const remaining = res.headers.get("X-RateLimit-Remaining");
+    if (remaining != null && !Number.isNaN(Number(remaining))) {
+      this._remaining = Number(remaining);
+    }
+    const reset = res.headers.get("X-RateLimit-Reset");
+    if (reset != null && !Number.isNaN(Number(reset))) {
+      // Raindrop spike: reset is epoch seconds.
+      const resetSec = Number(reset);
+      this._resetAt = resetSec > 1e12 ? resetSec : resetSec * 1000;
+    }
+  }
+
   #retryAfterMs(res) {
     const retryAfter = res.headers.get("Retry-After");
     if (retryAfter && !Number.isNaN(Number(retryAfter))) {
@@ -62,10 +109,18 @@ export class RaindropClient {
     }
     const reset = res.headers.get("X-RateLimit-Reset");
     if (reset && !Number.isNaN(Number(reset))) {
-      const ms = Number(reset) * 1000 - Date.now();
+      const resetSec = Number(reset);
+      const resetAt = resetSec > 1e12 ? resetSec : resetSec * 1000;
+      const ms = resetAt - Date.now();
       if (ms > 0) return ms;
     }
     return RATE_LIMIT_FALLBACK_MS;
+  }
+
+  /** Throw RateLimitError when headers say we should stop making more calls. */
+  throwIfShouldPause() {
+    if (!this.shouldPause()) return;
+    throw new RateLimitError(this.pauseUntil(), { proactive: true });
   }
 
   // Confirms the token works and returns the account user object.
@@ -98,13 +153,12 @@ export class RaindropClient {
   // Raindrop to enrich metadata (cover, excerpt) from the link. Rich fields
   // are intentionally omitted so we never clear tags/notes/highlights.
   async createRaindrop({ link, title, collectionId }) {
-    const body = {
+    const data = await this.request("POST", "/raindrop", {
       link,
       title: title || link,
       collection: { $id: collectionId },
       pleaseParse: {},
-    };
-    const data = await this.request("POST", "/raindrop", body);
+    });
     return data.item;
   }
 

@@ -83,7 +83,7 @@ The extension SHALL provide a "Run backfill now" control that starts the one-sho
 - **THEN** the backfill sweep begins enqueuing existing bookmarks per their resolved policies
 
 ### Requirement: Sync status and log display
-The extension SHALL display sync status, including pending queue size, recent sync activity, and any errors such as authentication failures or rate-limit backoff.
+The extension SHALL display sync status, including pending queue size, recent sync activity (up to 500 entries retained in local storage), and any errors such as authentication failures or rate-limit backoff. The status view SHALL offer controls for an opt-in long-term activity archive (enable with settings, export, clear) as specified by the activity-log-archive capability.
 
 #### Scenario: Pending work shown
 - **WHEN** jobs are queued and being processed
@@ -93,6 +93,10 @@ The extension SHALL display sync status, including pending queue size, recent sy
 - **WHEN** a Raindrop authentication error occurs
 - **THEN** the error is shown in the status view
 - **AND** the view indicates that deletions are halted until it is resolved
+
+#### Scenario: Recent activity retention
+- **WHEN** more than 500 activity lines have been recorded
+- **THEN** the recent activity list retained for the status view keeps the newest 500 entries
 
 ### Requirement: Sync mode configuration
 The extension SHALL let the user choose sync mode from `one-way` and `bidirectional`, defaulting to `one-way`, and SHALL persist the choice in extension storage.
@@ -146,3 +150,14 @@ The extension SHALL let the user choose Raindrop→Edge folder mode from `existi
 - **THEN** the UI explains that existing-only skips unmatched raindrops without a catch-all folder
 - **AND** explains that create-as-needed creates folders when pulling bookmarks
 - **AND** explains that mirror-all also creates folders for empty Raindrop collections under the root
+
+### Requirement: Folder policies host Raindrop-only picker
+The extension SHALL place the Raindrop-only collections chooser as an expandable section at the bottom of Folder policies when bidirectional mode is on, and SHALL persist allowlist drafts via the folder-policies save/discard flow. Help text SHALL clarify that the Edge tree above is Edge-only and the expandable is for Raindrop-only opt-in.
+
+#### Scenario: Save allowlist with folder policies
+- **WHEN** the user changes Raindrop-only checkboxes and saves folder policies
+- **THEN** the allowlist is persisted with overrides
+
+#### Scenario: Discard reverts allowlist draft
+- **WHEN** the user discards folder-policy changes
+- **THEN** Raindrop-only checkbox draft reverts to the last saved allowlist

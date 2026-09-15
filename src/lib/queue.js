@@ -104,6 +104,26 @@ export async function deferUntil(id, until) {
   });
 }
 
+/**
+ * Push every currently-due job out to `until` so a rate-limit pause does not
+ * leave a stampede of due work the moment the window opens (or on the next tick).
+ * @param {number} until epoch ms
+ * @param {number} [now]
+ */
+export async function deferAllDueUntil(until, now = Date.now()) {
+  return withLock(async () => {
+    const jobs = await readQueue();
+    let changed = false;
+    for (const job of jobs) {
+      if ((job.nextAttemptAt ?? 0) <= now) {
+        job.nextAttemptAt = until;
+        changed = true;
+      }
+    }
+    if (changed) await writeQueue(jobs);
+  });
+}
+
 export async function clear() {
   return withLock(async () => {
     await writeQueue([]);

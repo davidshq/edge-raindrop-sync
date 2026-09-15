@@ -233,7 +233,8 @@ function makeMockRaindrop() {
       return { items, count: items.length };
     },
     async getRaindrop(id) {
-      return raindrops.get(Number(id)) || trash.get(Number(id));
+      // Live items only — trashed ids are "gone" for delete-detection confirms.
+      return raindrops.get(Number(id)) || null;
     },
     async updateRaindrop(id, patch) {
       const item = raindrops.get(Number(id));
@@ -900,7 +901,8 @@ async function scenario67_raindropFolderAllowlist() {
     "empty allowlist leaves create-as-needed unchanged"
   );
 
-  // Prune: after Research subtree is fully on Edge, stale allowlist clears.
+  // Prune: missing Raindrop ids drop; fully mirrored allowlist ids stay
+  // (Clear selection exits selective mode — reconcile must not undo opt-in).
   await resetAll(eng.store);
   const folderRoot = await chrome.bookmarks.create({
     parentId: "2",
@@ -927,14 +929,15 @@ async function scenario67_raindropFolderAllowlist() {
   const afterPrune = await eng.store.getConfig();
   assert.deepEqual(
     afterPrune.raindropFolderAllowlist,
-    {},
-    "reconcile prunes fully-mirrored + missing allowlist ids"
+    { [String(research._id)]: { path: "Research" } },
+    "reconcile keeps live allowlist ids; drops missing only"
   );
-  // With allowlist cleared, Other (still Raindrop-only) pulls under create-as-needed.
+  // Selective mode still active: Other (unchecked) must not pull.
   await eng.sync.drain();
-  assert.ok(
-    findEdgeByUrl("https://example.com/ers-verify-allow-other"),
-    "after prune, create-as-needed resumes for new Raindrop-only"
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-allow-other"),
+    false,
+    "after prune of missing ids, selective mode still skips unchecked"
   );
 
   // Legacy pull job without collectionId still resolves under allowlist.
@@ -965,9 +968,227 @@ async function scenario67_raindropFolderAllowlist() {
     "legacy pull resolves collectionId from path"
   );
 
-  console.log(
-    "  ✔ allowlist skip/allow/empty-folder/Edge-bypass/empty-preserves-mode/prune/legacy"
+  // Outside-root allowlist: pull once, second reconcile must not DELETE_EDGE.
+  await resetAll(eng.store);
+  const indie = await mock.createCollection("IndieOutside", null);
+  const indieItem = mock._seedRich(indie._id, {
+    link: "https://example.com/ers-verify-indie-outside",
+    title: "ERS indie outside",
+  });
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+    raindropFolderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+    raindropFolderAllowlist: {
+      [String(indie._id)]: { path: "IndieOutside" },
+    },
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  const pulledIndie = findEdgeByUrl("https://example.com/ers-verify-indie-outside");
+  assert.ok(pulledIndie, "outside-root allowlisted pulls");
+  const indieFolder = [...bookmarks.values()].find(
+    (n) => !n.url && n.title === "IndieOutside",
   );
+  assert.ok(indieFolder, "outside-root IndieOutside folder created");
+  const raindropContainer = bookmarks.get(String(indieFolder.parentId));
+  assert.equal(
+    raindropContainer?.title,
+    "Raindrop",
+    "outside-root folder under Other favorites / Raindrop",
+  );
+  assert.equal(
+    raindropContainer?.parentId,
+    "2",
+    "Raindrop container lives under Other favorites",
+  );
+  // Second reconcile: still present in Raindrop, must not queue Edge delete.
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-indie-outside"),
+    "outside-root pair survives second reconcile (no false delete)",
+  );
+  const pairs = await eng.store.getPairs();
+  assert.ok(
+    pairs.byRaindrop[String(indieItem._id)],
+    "pair still mapped after second reconcile",
+  );
+
+  // Drop into Other favorites / Raindrop / IndieOutside → original outside-root collection.
+  const dropped = await chrome.bookmarks.create({
+    parentId: indieFolder.id,
+    title: "ERS drop into outside-root",
+    url: "https://example.com/ers-verify-indie-drop",
+  });
+  await eng.queue.enqueue(dropped.id);
+  await eng.sync.drain();
+  const droppedRain = [...mock._raindrops.values()].find(
+    (r) => r.link === "https://example.com/ers-verify-indie-drop",
+  );
+  assert.ok(droppedRain, "drop under Raindrop/ uploads to Raindrop");
+  assert.equal(
+    Number(droppedRain.collection?.$id),
+    Number(indie._id),
+    "drop lands in original outside-root collection (not Edge/Other favorites/Raindrop/…)",
+  );
+
+  // Clear allowlist: outside-root pair must still survive (getRaindrop confirm).
+  await eng.store.setConfig({
+    raindropFolderAllowlist: {},
+  });
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.ok(
+    findEdgeByUrl("https://example.com/ers-verify-indie-outside"),
+    "outside-root pair survives Clear selection / empty allowlist",
+  );
+  assert.ok(
+    (await eng.store.getPairs()).byRaindrop[String(indieItem._id)],
+    "pair still mapped after clearing allowlist",
+  );
+
+  console.log(
+    "  ✔ allowlist skip/allow/empty-folder/Edge-bypass/empty-preserves-mode/prune/legacy/outside-root/upload-roundtrip/clear"
+  );
+}
+
+async function scenario68_rateLimitBudget() {
+  console.log("\n== 6.8 Rate-limit gate + capped delete-confirm GETs ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, JOB, MAX_ALIVE_CHECKS_PER_TICK } = eng.constants;
+  await resetAll(eng.store);
+
+  const mock = makeMockRaindrop();
+  let getRaindropCalls = 0;
+  const origGet = mock.getRaindrop.bind(mock);
+  mock.getRaindrop = async (id) => {
+    getRaindropCalls++;
+    return origGet(id);
+  };
+  patchClient(eng.raindropMod, mock);
+
+  await eng.store.setConfig({
+    token: "mock",
+    rootName: "ERS-Verify-Rate",
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+  });
+
+  // Global pause must skip reconcile/drain API work.
+  await eng.store.noteRateLimitedUntil(Date.now() + 60_000);
+  const skipped = await eng.reconcile.reconcile();
+  assert.equal(skipped.skipped, true, "reconcile skips while rate-limited");
+  assert.equal(skipped.reason, "rate_limited", "skip reason is rate_limited");
+  assert.equal(mock._collections.size, 0, "no collection fetch while gated");
+  await eng.store.clearRateLimit();
+
+  // Create root + many pairs that are NOT in the Raindrop listing → delete confirms.
+  const root = await mock.createCollection("ERS-Verify-Rate", null);
+  const orphans = MAX_ALIVE_CHECKS_PER_TICK + 5;
+  for (let i = 0; i < orphans; i++) {
+    const rid = 9000 + i;
+    mock._raindrops.set(rid, {
+      _id: rid,
+      link: `https://example.com/ers-orphan-${i}`,
+      title: `orphan-${i}`,
+      collection: { $id: root._id },
+    });
+    // Pair exists, then remove from Raindrop so confirm path runs.
+    await eng.store.recordSynced(`bm-orphan-${i}`, String(rid));
+    mock._raindrops.delete(rid);
+  }
+
+  getRaindropCalls = 0;
+  await eng.reconcile.reconcile();
+  assert.equal(
+    getRaindropCalls,
+    MAX_ALIVE_CHECKS_PER_TICK,
+    `alive checks exactly capped (got ${getRaindropCalls})`
+  );
+  let deleteJobs = (await eng.queue.list()).filter((j) => j.kind === JOB.DELETE_EDGE);
+  assert.equal(
+    deleteJobs.length,
+    MAX_ALIVE_CHECKS_PER_TICK,
+    "only confirmed-gone pairs enqueue deletes this tick"
+  );
+  const pairs = await eng.store.getPairs();
+  assert.equal(
+    Object.keys(pairs.byRaindrop).length,
+    orphans,
+    "pairs uncleared until DELETE_EDGE drains (no stampede side effects)"
+  );
+  const offsetAfter = (await eng.store.getReconcileState()).aliveConfirmOffset;
+  assert.equal(
+    offsetAfter,
+    MAX_ALIVE_CHECKS_PER_TICK % orphans,
+    "aliveConfirmOffset advances past the first window"
+  );
+
+  // Second cycle rotates — remaining orphans get delete jobs (cap may wrap).
+  getRaindropCalls = 0;
+  await eng.reconcile.reconcile();
+  assert.ok(
+    getRaindropCalls > 0 && getRaindropCalls <= MAX_ALIVE_CHECKS_PER_TICK,
+    `second cycle still capped (got ${getRaindropCalls})`
+  );
+  deleteJobs = (await eng.queue.list()).filter((j) => j.kind === JOB.DELETE_EDGE);
+  assert.equal(deleteJobs.length, orphans, "all orphans eventually queued across cycles");
+
+  // 429 during drain sets global pause + defers due jobs.
+  await eng.store.clearRateLimit();
+  const folder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Rate-Folder",
+  });
+  const bm = await chrome.bookmarks.create({
+    parentId: folder.id,
+    title: "rate-limit-me",
+    url: "https://example.com/ers-rate-limit-upload",
+  });
+  await eng.queue.enqueue(bm.id);
+  const Proto = eng.raindropMod.RaindropClient.prototype;
+  const prevCreate = Proto.createRaindrop;
+  Proto.createRaindrop = async () => {
+    throw new eng.raindropMod.RateLimitError(Date.now() + 30_000);
+  };
+  await eng.sync.drain();
+  Proto.createRaindrop = prevCreate;
+  assert.equal(await eng.store.isRateLimited(), true, "429 sets global rate-limit pause");
+  const due = await eng.queue.due(Date.now());
+  assert.equal(due.length, 0, "due jobs deferred past the pause");
+
+  // Heartbeat cooldown: after a completed cycle, force:false skips re-listing.
+  await eng.store.clearRateLimit();
+  await eng.store.setReconcileState({
+    cursorPage: 0,
+    outsideCursor: null,
+    seenAcc: null,
+    running: false,
+    lastRunAt: Date.now(),
+    lastError: null,
+  });
+  const cooled = await eng.reconcile.reconcile({ force: false });
+  assert.equal(cooled.skipped, true, "heartbeat cooldown skips idle re-scan");
+  assert.equal(cooled.reason, "cooldown", "skip reason is cooldown");
+  const forced = await eng.reconcile.reconcile({ force: true });
+  assert.notEqual(forced.skipped, true, "manual reconcile bypasses cooldown");
+
+  // Manual reconcileNow must set the global gate on RateLimitError (not only fail the UI).
+  await eng.store.clearRateLimit();
+  const prevRoot = Proto.getRootCollections;
+  Proto.getRootCollections = async () => {
+    throw new eng.raindropMod.RateLimitError(Date.now() + 45_000);
+  };
+  const manual = await eng.sync.reconcileNow();
+  Proto.getRootCollections = prevRoot;
+  assert.equal(manual.skipped, true, "reconcileNow returns skipped on 429");
+  assert.equal(manual.reason, "rate_limited", "reconcileNow skip reason is rate_limited");
+  assert.equal(await eng.store.isRateLimited(), true, "reconcileNow 429 sets global pause");
+
+  console.log("  ✔ global gate, capped confirms, round-robin, skip reasons, cooldown, reconcileNow gate");
 }
 
 async function optionalLiveSmoke() {
@@ -1030,6 +1251,7 @@ async function main() {
   await scenario65_exclude();
   await scenario66_raindropFolderModes();
   await scenario67_raindropFolderAllowlist();
+  await scenario68_rateLimitBudget();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

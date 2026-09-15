@@ -16,7 +16,12 @@ Existing `raindropFolderMode` (`existing-only` / `create-as-needed` / `mirror-al
 **Non-Goals:**
 - Mixing Raindrop rows into the Edge folder-policy tree (separate expandable)
 - Per-child deny under an allowed parent (v1 parent includes descendants)
-- Syncing outside the configured root
+
+**Note:** The picker lists Raindrop-only collections account-wide (not only under
+the sync root). Checking an outside-root collection pulls it into Edge under
+`Other favorites / Raindrop / <collection path>`. Edge→Raindrop uploads from that
+landing zone map back to the account-level collection (not under the sync root).
+Empty allowlist still limits *automatic* folder-mode sync to the configured root only.
 
 ## Decisions
 
@@ -42,7 +47,7 @@ Existing `raindropFolderMode` (`existing-only` / `create-as-needed` / `mirror-al
 2. `create-as-needed` / `mirror-all` / `existing-only` apply only to **automatic** behavior when allowlist is empty (today’s behavior preserved for existing users).  
 3. When allowlist is **non-empty**, Raindrop-only paths use allowlist only (selective); Edge-existing bypass remains.  
 
-**Why:** Empty allowlist = no behavior change for current installs; checking anything switches you into selective Raindrop-only opt-in without renaming modes.
+**Why:** Empty allowlist = no behavior change for current installs; checking anything switches you into selective Raindrop-only opt-in without renaming modes. Fully mirrored allowlist ids stay until **Clear selection** — auto-pruning them would empty the allowlist and undo selective mode (disastrous with `existing-only`).
 
 ### D4. Allowlist storage
 **Choice:** `{ [collectionId: string]: { path: string } }` on config or dedicated storage key; draft with folder policies until Save.
@@ -65,6 +70,7 @@ Existing `raindropFolderMode` (`existing-only` / `create-as-needed` / `mirror-al
 - **Mode + allowlist interaction is subtle** → Copy under expandable when mode is create-as-needed/mirror-all and allowlist empty: “This mode syncs all Raindrop folders automatically. To choose specific ones, switch to Existing Edge folders only and check collections below—or check collections to override into selective mode.” With D3 lock (non-empty allowlist ⇒ selective), say: “Once you check any collection, only checked Raindrop-only collections sync.”
 - **Stale ids/paths** → Refresh; ignore missing ids in engine.
 - **Draft couples allowlist to policy save** → Acceptable; document.
+- **Rate limits** → Outside-root listing + delete-confirm `GET /raindrop/{id}` can multiply API calls. Mitigated by a global `rateLimitedUntil` gate, shared page budget for root/outside-root, and capped alive-checks per tick (see engine constants).
 
 ## Migration Plan
 

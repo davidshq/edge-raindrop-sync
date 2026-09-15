@@ -5,7 +5,7 @@
 // deletion. Policy-driven Edge cleanup never cascades into a Raindrop delete.
 // Effective `exclude` blocks upload, ingest, and delete propagation both ways.
 
-import { POLICY, JOB, SYNC_MODE, RAINDROP_FOLDER_MODE } from "./constants.js";
+import { POLICY, JOB, SYNC_MODE, RAINDROP_FOLDER_MODE, MAX_JOBS_PER_DRAIN } from "./constants.js";
 import {
   getConfig,
   getOverrides,
@@ -27,6 +27,9 @@ import {
   setStatus,
   appendLog,
   ensurePairsMigrated,
+  isRateLimited,
+  noteRateLimitedUntil,
+  clearRateLimit,
 } from "./store.js";
 import * as queue from "./queue.js";
 import {
@@ -47,6 +50,7 @@ import {
   ensureCollectionPath,
   findRootCollection,
   collectionIdFromRelative,
+  raindropUploadSegments,
 } from "./collections.js";
 import { canCreateRaindropOnlyPath } from "./allowlist.js";
 import { reconcile } from "./reconcile.js";
@@ -68,6 +72,7 @@ export async function drain() {
 
 /**
  * Shared Auth / rate-limit handling for drain and reconcile.
+ * On rate limit: set a global pause, defer all due jobs, abort the current loop.
  * @returns {boolean} true if the caller should abort the current loop
  */
 async function handleClientError(err, { job } = {}) {
@@ -78,26 +83,74 @@ async function handleClientError(err, { job } = {}) {
     return true;
   }
   if (err instanceof RateLimitError) {
-    if (job) {
-      await queue.deferUntil(job.id, err.retryAt);
-      await appendLog("warn", "Rate limited by Raindrop; backing off.");
-      await setStatus({ pending: await queue.size() });
-    } else {
-      await appendLog("warn", "Rate limited during reconcile; will retry on heartbeat.");
+    const entered = await noteRateLimitedUntil(err.retryAt);
+    if (job) await queue.deferUntil(job.id, err.retryAt);
+    await queue.deferAllDueUntil(err.retryAt);
+    await setStatus({ pending: await queue.size() });
+    if (entered) {
+      const kind = err.proactive ? "budget low" : "HTTP 429";
+      await appendLog(
+        "warn",
+        `Raindrop rate limit (${kind}); pausing API calls until ${new Date(err.retryAt).toISOString()}.`
+      );
     }
     return true;
   }
   return false;
 }
 
+/**
+ * Options/popup "Reconcile now": force past idle cooldown, then drain.
+ * Rate-limit / auth errors use the same global gate as the heartbeat so a
+ * manual 429 cannot leave rateLimitedUntil unset while the alarm keeps firing.
+ * @returns {Promise<{
+ *   enqueued: number,
+ *   pages: number,
+ *   done: boolean,
+ *   skipped?: boolean,
+ *   reason?: "busy"|"rate_limited"|"cooldown",
+ * }>}
+ */
+export async function reconcileNow() {
+  try {
+    if (await isRateLimited()) {
+      return { enqueued: 0, pages: 0, done: false, skipped: true, reason: "rate_limited" };
+    }
+    const result = await reconcile({ force: true });
+    if (await isRateLimited()) return result;
+    await drain();
+    return result;
+  } catch (err) {
+    if (await handleClientError(err)) {
+      if (err instanceof RateLimitError) {
+        return { enqueued: 0, pages: 0, done: false, skipped: true, reason: "rate_limited" };
+      }
+      throw err;
+    }
+    await appendLog("error", `Reconcile failed: ${err.message}`);
+    throw err;
+  }
+}
+
 /** Heartbeat entry: drain queue, then reconcile when bidirectional. */
 export async function tick() {
+  if (await isRateLimited()) {
+    // Stay quiet — status.rateLimitedUntil is the signal; avoid log spam each minute.
+    return;
+  }
   await drain();
+  if (await isRateLimited()) return;
   const config = await getConfig();
-  if (config.syncMode !== SYNC_MODE.BIDIRECTIONAL) return;
+  if (config.syncMode !== SYNC_MODE.BIDIRECTIONAL) {
+    await clearRateLimit();
+    return;
+  }
   try {
-    await reconcile();
+    // Heartbeat uses cooldown; Options/popup use reconcileNow() (force: true).
+    await reconcile({ force: false });
+    if (await isRateLimited()) return;
     await drain(); // process any jobs reconcile just enqueued
+    if (!(await isRateLimited())) await clearRateLimit();
   } catch (err) {
     if (await handleClientError(err)) return;
     await appendLog("error", `Reconcile failed: ${err.message}`);
@@ -105,6 +158,8 @@ export async function tick() {
 }
 
 async function drainLoop() {
+  if (await isRateLimited()) return;
+
   const config = await getConfig();
   if (!config.token) {
     await setStatus({ lastError: "No Raindrop token configured", pending: await queue.size() });
@@ -123,9 +178,19 @@ async function drainLoop() {
   let index = null;
   const getIndex = async () => (index ??= await buildCollectionIndex(client));
 
+  let processed = 0;
   for (const job of dueJobs) {
+    if (processed >= MAX_JOBS_PER_DRAIN) {
+      await appendLog(
+        "info",
+        `Drain paused after ${MAX_JOBS_PER_DRAIN} jobs; ${dueJobs.length - processed} remain for later.`
+      );
+      break;
+    }
     try {
       await processJob(job, { client, config, overrides, cache, getIndex });
+      processed++;
+      client.throwIfShouldPause();
     } catch (err) {
       if (await handleClientError(err, { job })) return;
       await queue.defer(job.id, Date.now());
@@ -193,7 +258,8 @@ async function processUpload(job, ctx) {
 
   if (!(await hasSynced(job.id))) {
     const index = await getIndex();
-    const fullSegments = [config.rootName, ...segments];
+    // Other favorites / Raindrop / … → account-level collection path; else under sync root.
+    const fullSegments = raindropUploadSegments(segments, config.rootName);
     const collectionId = await ensureCollectionPath(
       client,
       index,

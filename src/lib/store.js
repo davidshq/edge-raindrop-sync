@@ -3,7 +3,8 @@
 // The MV3 service worker is ephemeral, so every piece of state the engine needs
 // to survive a restart lives here: config, per-folder policy overrides, the
 // bidirectional pair map, tombstones, suppressions, collection-path cache,
-// the job queue, and status/log.
+// the job queue, and status/log. Opt-in long-term activity history lives in
+// IndexedDB via log-archive.js (keepLongTermLog), not chrome.storage.local.
 //
 // Pair and suppress mutations share withLock with the queue so concurrent
 // drain / live-capture / reconcile cannot clobber each other's RMW updates.
@@ -11,6 +12,7 @@
 
 import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS, POLICY, SYNC_MODE } from "./constants.js";
 import { withLock } from "./mutex.js";
+import { appendArchiveEntry } from "./log-archive.js";
 
 async function read(key, fallback) {
   const got = await chrome.storage.local.get(key);
@@ -36,6 +38,7 @@ export function normalizeConfig(config) {
   if (!next.raindropFolderAllowlist || typeof next.raindropFolderAllowlist !== "object") {
     next.raindropFolderAllowlist = {};
   }
+  next.keepLongTermLog = !!next.keepLongTermLog;
   return next;
 }
 
@@ -287,6 +290,8 @@ export async function getReconcileState() {
     running: false,
     lastRunAt: null,
     lastError: null,
+    /** Rotating index into delete-confirm candidates (survives completed cycles). */
+    aliveConfirmOffset: 0,
   });
 }
 
@@ -328,6 +333,8 @@ export async function getStatus() {
     lastError: null,
     deletionsHalted: false,
     lastActivityAt: null,
+    /** @type {number|null} epoch ms — skip Raindrop API work until then */
+    rateLimitedUntil: null,
   });
 }
 
@@ -337,14 +344,48 @@ export async function setStatus(patch) {
   return next;
 }
 
+/** True while a global Raindrop rate-limit pause is active. */
+export async function isRateLimited(now = Date.now()) {
+  const { rateLimitedUntil } = await getStatus();
+  return rateLimitedUntil != null && rateLimitedUntil > now;
+}
+
+/**
+ * Enter (or extend) the global Raindrop pause. Idempotent log-wise for callers.
+ * @param {number} until epoch ms
+ * @returns {Promise<boolean>} true if this call newly entered / extended the window
+ */
+export async function noteRateLimitedUntil(until) {
+  const status = await getStatus();
+  const prev = status.rateLimitedUntil ?? 0;
+  if (until <= prev) return false;
+  await setStatus({ rateLimitedUntil: until });
+  return true;
+}
+
+/** Clear the global pause after a successful tick past the window. */
+export async function clearRateLimit() {
+  const status = await getStatus();
+  if (status.rateLimitedUntil == null) return;
+  await setStatus({ rateLimitedUntil: null });
+}
+
 export async function getLog() {
   return read(KEY.LOG, []);
 }
 
 export async function appendLog(level, message, at) {
+  const entry = { at: at ?? Date.now(), level, message };
   const log = await getLog();
-  log.unshift({ at: at ?? Date.now(), level, message });
+  log.unshift(entry);
   await write(KEY.LOG, log.slice(0, LOG_LIMIT));
+  // Opt-in IndexedDB archive; never fail the recent write or sync path.
+  try {
+    const { keepLongTermLog } = await getConfig();
+    if (keepLongTermLog) await appendArchiveEntry(entry);
+  } catch (err) {
+    console.error("[ers] log archive append failed:", err);
+  }
 }
 
 export { read as _read, write as _write };

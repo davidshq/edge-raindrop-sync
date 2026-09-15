@@ -17,6 +17,8 @@
 // restarts and survives renames/moves within the profile — which is exactly the
 // rename-survival property the design wanted from a GUID.
 
+import { OUTSIDE_ROOT_MIRROR_FOLDER } from "./constants.js";
+
 export async function getNode(id) {
   const [node] = await chrome.bookmarks.get(id);
   return node;
@@ -119,7 +121,17 @@ export async function resolveMirrorPlacement(relativeSegments, rootName, topRoot
   }
 
   const [first, ...rest] = relativeSegments;
-  const match = tops.find((t) => (t.title || "").toLowerCase() === first.toLowerCase());
+  // Sync-root mirror folder and outside-root Raindrop container both live under
+  // Other favorites; match either prefix so we do not nest Edge/Raindrop/….
+  const firstLower = (first || "").toLowerCase();
+  if (
+    firstLower === (rootName || "").toLowerCase() ||
+    firstLower === OUTSIDE_ROOT_MIRROR_FOLDER.toLowerCase()
+  ) {
+    return { startId: base.id, titles: relativeSegments };
+  }
+
+  const match = tops.find((t) => (t.title || "").toLowerCase() === firstLower);
   if (match) {
     return { startId: match.id, titles: rest };
   }

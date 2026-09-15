@@ -24,7 +24,11 @@ async function refresh() {
   $("reconcile").classList.toggle("hidden", !bi);
 
   const halt = $("halt");
-  if (resp.status?.deletionsHalted && resp.status?.lastError) {
+  const rateUntil = resp.status?.rateLimitedUntil;
+  if (rateUntil && rateUntil > Date.now()) {
+    halt.textContent = `Rate limited until ${new Date(rateUntil).toLocaleTimeString()}`;
+    halt.classList.remove("hidden");
+  } else if (resp.status?.deletionsHalted && resp.status?.lastError) {
     halt.textContent = resp.status.lastError;
     halt.classList.remove("hidden");
   } else {
@@ -47,9 +51,25 @@ $("reconcile").addEventListener("click", async () => {
   $("msg").textContent = "Reconciling…";
   try {
     const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
-    $("msg").textContent = resp?.ok
-      ? `Reconcile queued ${resp.enqueued ?? 0}.`
-      : `Failed: ${resp?.error}`;
+    if (!resp?.ok) {
+      $("msg").textContent = `Failed: ${resp?.error}`;
+    } else if (resp.skipped) {
+      if (resp.reason === "rate_limited") {
+        $("msg").textContent = "Paused for Raindrop rate limits — try again shortly.";
+      } else if (resp.reason === "cooldown") {
+        $("msg").textContent = "Reconcile on cooldown — try again later.";
+      } else {
+        $("msg").textContent = "Already running — try again shortly.";
+      }
+    } else if (!resp.done) {
+      $("msg").textContent =
+        `Scanning… queued ${resp.enqueued ?? 0} (more pages; open Options to run to completion).`;
+    } else {
+      $("msg").textContent =
+        (resp.enqueued ?? 0) > 0
+          ? `Finished: queued ${resp.enqueued} pull(s).`
+          : "Finished (no new pulls).";
+    }
   } catch (err) {
     $("msg").textContent = `Failed: ${err.message}`;
   }

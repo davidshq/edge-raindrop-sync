@@ -12,17 +12,23 @@ import {
   setOverrides,
   getRaindropFolderAllowlist,
   setRaindropFolderAllowlist,
+  isRateLimited,
 } from "../lib/store.js";
+import {
+  countArchiveEntries,
+  exportArchiveEntries,
+  clearArchive,
+} from "../lib/log-archive.js";
 import { getTree, mirrorPathExists, getTopRoots } from "../lib/bookmarks.js";
 import {
   buildCollectionIndex,
   findRootCollection,
-  collectionsUnderRoot,
+  collectionsForAllowlistPicker,
   getById,
   getByParent,
 } from "../lib/collections.js";
 import { isCollectionAllowed, pruneAllowlist } from "../lib/allowlist.js";
-import { RaindropClient } from "../lib/raindrop.js";
+import { RaindropClient, RateLimitError } from "../lib/raindrop.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -93,6 +99,7 @@ async function loadSettings() {
   $("syncMode").value = config.syncMode || SYNC_MODE.ONE_WAY;
   $("defaultPolicy").value = config.defaultPolicy;
   $("pruneEmpty").checked = !!config.pruneEmpty;
+  $("keepLongTermLog").checked = !!config.keepLongTermLog;
   $("raindropFolderMode").value =
     config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED;
 
@@ -122,6 +129,7 @@ async function saveSettings() {
     syncMode,
     defaultPolicy,
     pruneEmpty: $("pruneEmpty").checked,
+    keepLongTermLog: $("keepLongTermLog").checked,
     raindropFolderMode: $("raindropFolderMode").value || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
   });
   updateSyncModeUi(syncMode);
@@ -130,6 +138,7 @@ async function saveSettings() {
   }
   $("saveStatus").textContent = "Saved.";
   setTimeout(() => ($("saveStatus").textContent = ""), 1500);
+  refreshArchiveMeta();
 
   // First switch into bidirectional: kick an immediate reconcile.
   if (syncMode === SYNC_MODE.BIDIRECTIONAL && previous.syncMode !== SYNC_MODE.BIDIRECTIONAL) {
@@ -175,7 +184,11 @@ async function refreshStatus() {
   }
 
   const banner = $("haltBanner");
-  if (resp.status?.deletionsHalted && resp.status?.lastError) {
+  const rateUntil = resp.status?.rateLimitedUntil;
+  if (rateUntil && rateUntil > Date.now()) {
+    banner.textContent = `Paused for Raindrop rate limits until ${new Date(rateUntil).toLocaleTimeString()}. Sync resumes automatically.`;
+    banner.classList.remove("hidden");
+  } else if (resp.status?.deletionsHalted && resp.status?.lastError) {
     banner.textContent = `Deletions halted: ${resp.status.lastError}. Jobs are kept and will retry once resolved.`;
     banner.classList.remove("hidden");
   } else {
@@ -195,6 +208,65 @@ async function refreshStatus() {
     li.append(ts, msg);
     log.append(li);
   }
+
+  refreshArchiveMeta();
+}
+
+async function refreshArchiveMeta() {
+  const hint = $("archiveHint");
+  const countEl = $("archiveCount");
+  try {
+    const config = await getConfig();
+    const count = await countArchiveEntries();
+    countEl.textContent = String(count);
+    hint.textContent = config.keepLongTermLog
+      ? " · recording new lines"
+      : " · not recording (enable in Settings and Save)";
+  } catch {
+    countEl.textContent = "—";
+    hint.textContent = " · archive unavailable";
+  }
+}
+
+async function exportArchive() {
+  const out = $("archiveStatus");
+  out.textContent = "Exporting…";
+  try {
+    const entries = await exportArchiveEntries();
+    const blob = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = url;
+    a.download = `ers-activity-log-${stamp}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    out.textContent = `Exported ${entries.length} entries.`;
+  } catch (err) {
+    out.textContent = `Export failed: ${err.message}`;
+  }
+  setTimeout(() => {
+    if ($("archiveStatus").textContent.startsWith("Exported")) $("archiveStatus").textContent = "";
+  }, 2500);
+}
+
+async function clearArchiveConfirmed() {
+  const ok = window.confirm(
+    "Clear the long-term activity archive? This cannot be undone. The recent activity list is not affected.",
+  );
+  if (!ok) return;
+  const out = $("archiveStatus");
+  out.textContent = "Clearing…";
+  try {
+    await clearArchive();
+    out.textContent = "Archive cleared.";
+    await refreshArchiveMeta();
+  } catch (err) {
+    out.textContent = `Clear failed: ${err.message}`;
+  }
+  setTimeout(() => {
+    if ($("archiveStatus").textContent === "Archive cleared.") $("archiveStatus").textContent = "";
+  }, 2500);
 }
 
 async function runBackfill() {
@@ -213,10 +285,50 @@ async function runBackfill() {
 async function runReconcile(pendingMsg) {
   $("backfillStatus").textContent = pendingMsg || "Reconciling…";
   try {
-    const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
-    $("backfillStatus").textContent = resp?.ok
-      ? `Reconcile: queued ${resp.enqueued ?? 0} (done=${resp.done}).`
-      : `Failed: ${resp?.error}`;
+    // One click may need several passes (250 raindrops each) before folder
+    // ensure runs; keep going until done so "queued 0 (done=false)" is not
+    // mistaken for a finished no-op.
+    let totalQueued = 0;
+    let passes = 0;
+    const maxPasses = 40;
+    while (passes < maxPasses) {
+      passes++;
+      const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
+      if (!resp?.ok) {
+        $("backfillStatus").textContent = `Failed: ${resp?.error}`;
+        break;
+      }
+      if (resp.skipped) {
+        if (resp.reason === "rate_limited") {
+          $("backfillStatus").textContent =
+            "Paused for Raindrop rate limits — wait a minute, then try Reconcile again.";
+        } else if (resp.reason === "cooldown") {
+          $("backfillStatus").textContent =
+            "Reconcile on cooldown — wait a bit, or try again later.";
+        } else {
+          $("backfillStatus").textContent =
+            "Reconcile already running — wait a moment and try again.";
+        }
+        break;
+      }
+      totalQueued += resp.enqueued ?? 0;
+      if (resp.done) {
+        $("backfillStatus").textContent =
+          totalQueued > 0
+            ? `Reconcile finished: queued ${totalQueued} pull(s).`
+            : "Reconcile finished (no new pulls).";
+        break;
+      }
+      if (passes >= maxPasses) {
+        $("backfillStatus").textContent =
+          `Reconcile paused after ${passes} passes (${totalQueued} queued) — click Reconcile again to continue.`;
+        break;
+      }
+      $("backfillStatus").textContent =
+        `Still scanning Raindrop (pass ${passes})… ${totalQueued} pull(s) queued so far. ` +
+        `Folder sync starts when the scan completes.`;
+      await refreshStatus();
+    }
   } catch (err) {
     $("backfillStatus").textContent = `Failed: ${err.message}`;
   }
@@ -264,10 +376,25 @@ function policiesDirty() {
   );
 }
 
+function allRaindropOnlySelected() {
+  if (!raindropOnlyRows.length) return true;
+  const index = raindropOnlyRows._index;
+  const rootId = raindropOnlyRows._rootId;
+  return raindropOnlyRows.every(
+    (row) =>
+      !!draftAllowlist[row.id] ||
+      (index &&
+        rootId != null &&
+        isCollectionAllowed(row.id, index, rootId, draftAllowlist)),
+  );
+}
+
 function updatePoliciesUi(statusText) {
   const dirty = policiesDirty();
   $("savePolicies").disabled = !dirty;
   $("discardPolicies").disabled = !dirty;
+  $("selectAllRaindropOnly").disabled =
+    raindropOnlyRows.length === 0 || allRaindropOnlySelected();
   $("clearRaindropOnly").disabled = Object.keys(draftAllowlist).length === 0;
   if (statusText !== undefined) {
     $("policiesStatus").textContent = statusText;
@@ -302,7 +429,15 @@ function setAllowlistChecked(collectionId, path, checked) {
     delete draftAllowlist[id];
   }
   paintRaindropOnlyList();
-  updatePoliciesUi();
+}
+
+/** Check every listed Raindrop-only collection in the draft allowlist. */
+function selectAllRaindropOnlySelection() {
+  if (!raindropOnlyRows.length || allRaindropOnlySelected()) return;
+  for (const row of raindropOnlyRows) {
+    draftAllowlist[row.id] = { path: row.path };
+  }
+  paintRaindropOnlyList();
 }
 
 /** Clear draft Raindrop-only allowlist (Save folder policies to persist). */
@@ -310,7 +445,6 @@ function clearRaindropOnlySelection() {
   if (Object.keys(draftAllowlist).length === 0) return;
   draftAllowlist = {};
   paintRaindropOnlyList();
-  updatePoliciesUi();
 }
 
 async function renderTree() {
@@ -389,31 +523,33 @@ async function refreshRaindropOnlyList() {
   // Use the dropdown so the list loads before Settings are saved.
   if ($("syncMode").value !== SYNC_MODE.BIDIRECTIONAL) return;
   const config = await getConfig();
-  if (!config.token) {
+  // Prefer form values so an unsaved root/token rename still loads the right tree.
+  const token = ($("token").value || "").trim() || config.token;
+  const rootName = ($("rootName").value || "").trim() || config.rootName || "Edge";
+  if (!token) {
     status.textContent = "Add a Raindrop token in Settings to load collections.";
     raindropOnlyRows = [];
     paintRaindropOnlyList();
     return;
   }
+  if (await isRateLimited()) {
+    status.textContent = "Paused for Raindrop rate limits — try Refresh shortly.";
+    return;
+  }
   status.textContent = "Loading…";
   try {
-    const client = new RaindropClient(config.token);
+    const client = new RaindropClient(token);
     const index = await buildCollectionIndex(client);
-    const root = findRootCollection(index, config.rootName);
-    if (!root) {
-      status.textContent = `Root “${config.rootName}” not found in Raindrop yet.`;
-      raindropOnlyRows = [];
-      paintRaindropOnlyList();
-      return;
-    }
+    const root = findRootCollection(index, rootName);
+    const rootId = root?._id ?? null;
     const topRoots = await getTopRoots();
-    const under = collectionsUnderRoot(index, root._id);
+    const candidates = collectionsForAllowlistPicker(index, rootId);
 
-    // Heal sticky selective mode: drop allowlist ids that no longer cover any
-    // Raindrop-only path (fully mirrored or gone from Raindrop).
-    const pathExists = (relative) => mirrorPathExists(relative, config.rootName, topRoots);
-    const draftPruned = await pruneAllowlist(draftAllowlist, index, root._id, pathExists);
-    const savedPruned = await pruneAllowlist(savedAllowlist, index, root._id, pathExists);
+    // Heal sticky selective mode: drop allowlist ids deleted from Raindrop.
+    // Fully mirrored entries are kept until the user clears selection.
+    const pathExists = (relative) => mirrorPathExists(relative, rootName, topRoots);
+    const draftPruned = await pruneAllowlist(draftAllowlist, index, rootId, pathExists);
+    const savedPruned = await pruneAllowlist(savedAllowlist, index, rootId, pathExists);
     let pruneNote = "";
     if (draftPruned.removed > 0) {
       draftAllowlist = draftPruned.allowlist;
@@ -421,21 +557,28 @@ async function refreshRaindropOnlyList() {
     if (savedPruned.removed > 0) {
       savedAllowlist = savedPruned.allowlist;
       await setRaindropFolderAllowlist(savedAllowlist);
-      pruneNote = ` · cleared ${savedPruned.removed} synced/stale`;
+      pruneNote = ` · cleared ${savedPruned.removed} missing`;
     }
     if (draftPruned.removed > 0 || savedPruned.removed > 0) {
       updatePoliciesUi();
     }
 
     const rows = [];
-    for (const { collectionId, relativeSegments } of under) {
-      // Skip the bare root collection (no relative path).
+    if (!root) {
+      status.textContent =
+        `Root “${rootName}” not in Raindrop yet — save Settings / run a sync so the root exists before choosing Raindrop-only collections.` +
+        pruneNote;
+      raindropOnlyRows = [];
+      paintRaindropOnlyList();
+      return;
+    }
+
+    for (const { collectionId, relativeSegments, underSyncRoot } of candidates) {
       if (!relativeSegments.length) continue;
       const exists = await pathExists(relativeSegments);
       if (exists) continue;
       const path = relativeSegments.join(" / ");
       const col = getById(index, collectionId);
-      // Prefer Raindrop's raindrop count; fall back to "no child collections".
       const empty =
         col?.count != null
           ? Number(col.count) === 0
@@ -443,23 +586,34 @@ async function refreshRaindropOnlyList() {
       rows.push({
         id: String(collectionId),
         path,
-        depth: relativeSegments.length - 1,
+        depth: Math.max(0, relativeSegments.length - 1),
         empty,
+        underSyncRoot,
         title: col?.title || relativeSegments[relativeSegments.length - 1],
       });
     }
-    // Sort by path for stable indentation.
     rows.sort((a, b) => a.path.localeCompare(b.path));
     raindropOnlyRows = rows;
-    // Keep a mini index for parent-covers-child UI (ids only).
     raindropOnlyRows._index = index;
-    raindropOnlyRows._rootId = root._id;
-    status.textContent = rows.length
-      ? `${rows.length} Raindrop-only path(s)${pruneNote}`
-      : `None — all under root are in Edge.${pruneNote}`;
+    raindropOnlyRows._rootId = rootId;
+
+    const outside = rows.filter((r) => !r.underSyncRoot).length;
+    if (rows.length) {
+      status.textContent =
+        `${rows.length} Raindrop-only collection(s)` +
+        (outside ? ` (${outside} outside “${rootName}”)` : "") +
+        pruneNote;
+    } else {
+      status.textContent =
+        `None Raindrop-only — every Raindrop folder path already matches Edge.` +
+        pruneNote;
+    }
     paintRaindropOnlyList();
   } catch (err) {
-    status.textContent = `Failed: ${err.message}`;
+    status.textContent =
+      err instanceof RateLimitError
+        ? "Raindrop rate limited — wait a minute, then Refresh."
+        : `Failed: ${err.message}`;
     raindropOnlyRows = [];
     paintRaindropOnlyList();
   }
@@ -470,6 +624,7 @@ function paintRaindropOnlyList() {
   container.innerHTML = "";
   if (!raindropOnlyRows.length) {
     container.textContent = "";
+    updatePoliciesUi();
     return;
   }
   const index = raindropOnlyRows._index;
@@ -499,7 +654,9 @@ function paintRaindropOnlyList() {
     title.textContent = row.title;
     const sub = document.createElement("div");
     sub.className = "sub";
-    sub.textContent = coveredByParent ? `${row.path} · included via parent` : row.path;
+    sub.textContent = coveredByParent
+      ? `${row.path} · included via parent`
+      : row.path;
     meta.append(title, sub);
 
     const badge = document.createElement("span");
@@ -509,6 +666,7 @@ function paintRaindropOnlyList() {
     el.append(cb, meta, badge);
     container.append(el);
   }
+  updatePoliciesUi();
 }
 
 async function savePolicies() {
@@ -527,7 +685,6 @@ async function discardPolicies() {
   const tree = await getTree();
   paintTree(tree);
   paintRaindropOnlyList();
-  updatePoliciesUi();
 }
 
 /* ---- wire up ---- */
@@ -536,6 +693,8 @@ $("save").addEventListener("click", saveSettings);
 $("testToken").addEventListener("click", testToken);
 $("backfill").addEventListener("click", runBackfill);
 $("reconcile").addEventListener("click", () => runReconcile());
+$("exportArchive").addEventListener("click", exportArchive);
+$("clearArchive").addEventListener("click", clearArchiveConfirmed);
 $("syncMode").addEventListener("change", () => {
   const mode = $("syncMode").value;
   if (mode === SYNC_MODE.BIDIRECTIONAL) {
@@ -557,6 +716,7 @@ $("discardPolicies").addEventListener("click", discardPolicies);
 $("refreshRaindropOnly").addEventListener("click", () => {
   refreshRaindropOnlyList();
 });
+$("selectAllRaindropOnly").addEventListener("click", selectAllRaindropOnlySelection);
 $("clearRaindropOnly").addEventListener("click", clearRaindropOnlySelection);
 
 window.addEventListener("beforeunload", (event) => {

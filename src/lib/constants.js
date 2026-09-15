@@ -61,10 +61,10 @@ export const KEY = {
   PAIRS: "pairs", // { byBookmark: { [bookmarkId]: raindropId }, byRaindrop: { [raindropId]: bookmarkId } }
   TOMBSTONES: "tombstones", // { [raindropId]: { at, reason } }
   SUPPRESS: "suppress", // { removes: { [bookmarkId]: expiresAt }, creates: { [url]: expiresAt } }
-  RECONCILE: "reconcile", // { cursorPage, running, lastRunAt, lastError }
+  RECONCILE: "reconcile", // { cursorPage, outsideCursor, running, lastRunAt, lastError, seenAcc, aliveConfirmOffset }
   COLLECTION_CACHE: "collectionCache", // { [collectionPath]: collectionId }
-  STATUS: "status", // { pending, lastError, deletionsHalted, lastActivityAt }
-  LOG: "log", // [ { at, level, message } ] (capped)
+  STATUS: "status", // { pending, lastError, deletionsHalted, lastActivityAt, rateLimitedUntil }
+  LOG: "log", // [ { at, level, message } ] recent ring buffer (LOG_LIMIT)
 };
 
 export const DEFAULT_CONFIG = {
@@ -76,19 +76,48 @@ export const DEFAULT_CONFIG = {
   raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
   /** @type {Record<string, { path: string }>} Raindrop collection ids opted in for Edge sync */
   raindropFolderAllowlist: {},
+  /** When true, appendLog also writes to the IndexedDB long-term archive. */
+  keepLongTermLog: false,
 };
+
+/**
+ * Edge folder title that holds allowlisted Raindrop collections outside the
+ * sync root. Prefixed onto mirror paths so they land under
+ * Other favorites / Raindrop / … instead of colliding with Edge top roots or
+ * looking like children of the sync-root mirror folder.
+ */
+export const OUTSIDE_ROOT_MIRROR_FOLDER = "Raindrop";
 
 // The alarm that drives the drain heartbeat even with no bookmark activity.
 export const ALARM_NAME = "ers-heartbeat";
 export const HEARTBEAT_MINUTES = 1;
+/**
+ * Minimum gap between *completed* bidirectional reconcile cycles on the
+ * heartbeat. In-progress cursors always continue; manual "Reconcile now"
+ * bypasses this. Keeps idle installs from re-listing Raindrop every minute.
+ */
+export const MIN_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
 
 // Retry/backoff tuning. Backoff is capped so a stuck job keeps being retried.
 export const MAX_BACKOFF_MS = 5 * 60 * 1000; // 5 minutes
 export const BASE_BACKOFF_MS = 2000; // 2s, doubled per attempt
 export const RATE_LIMIT_FALLBACK_MS = 60 * 1000; // if no Retry-After header
+/** Stop Raindrop work early when X-RateLimit-Remaining falls to this. */
+export const RATE_LIMIT_RESERVE = 8;
+/** Cap queue drains per tick so a large backlog cannot burn the whole minute budget. */
+export const MAX_JOBS_PER_DRAIN = 20;
+/**
+ * Cap GET /raindrop/{id} delete-confirm checks per reconcile finish.
+ * Unchecked pairs are left alone until a later tick (fail-soft: no false deletes).
+ */
+export const MAX_ALIVE_CHECKS_PER_TICK = 8;
+/** Cap Raindrop list pages (root + outside-root) per reconcile tick. */
+export const MAX_RECONCILE_PAGES_PER_TICK = 5;
 
 // Suppression windows for extension-authored bookmark create/remove events.
 export const SUPPRESS_MS = 15_000;
 
-// Keep the in-page log bounded.
-export const LOG_LIMIT = 200;
+// Recent activity ring buffer in chrome.storage.local (Status UI).
+export const LOG_LIMIT = 500;
+/** Soft cap for opt-in IndexedDB long-term archive (oldest pruned first). */
+export const LOG_ARCHIVE_LIMIT = 50_000;

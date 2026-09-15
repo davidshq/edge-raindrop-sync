@@ -9,9 +9,14 @@
 // evaluation, not only onInstalled/onStartup.
 
 import { ALARM_NAME, HEARTBEAT_MINUTES, MSG } from "../lib/constants.js";
-import { tick, drain, handleBookmarkCreated, handleBookmarkRemoved } from "../lib/sync.js";
+import {
+  tick,
+  drain,
+  reconcileNow,
+  handleBookmarkCreated,
+  handleBookmarkRemoved,
+} from "../lib/sync.js";
 import { startBackfill } from "../lib/backfill.js";
-import { reconcile } from "../lib/reconcile.js";
 import * as queue from "../lib/queue.js";
 import {
   getStatus,
@@ -79,8 +84,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           break;
         }
         case MSG.RECONCILE_NOW: {
-          const result = await reconcile();
-          await drain();
+          // Goes through sync.reconcileNow so RateLimitError sets the global gate
+          // (same path as heartbeat), not only a UI error string.
+          const result = await reconcileNow();
           sendResponse({ ok: true, ...result });
           break;
         }

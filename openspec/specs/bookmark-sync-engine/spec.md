@@ -85,8 +85,38 @@ The extension SHALL provide a user-triggered backfill that walks the existing bo
 
 #### Scenario: Rate limit encountered during backfill
 - **WHEN** the Raindrop API returns HTTP 429 during backfill
-- **THEN** the engine backs off and retries with exponential delay
+- **THEN** the engine sets a global pause until Retry-After / X-RateLimit-Reset
+- **AND** defers all due jobs until that time
 - **AND** does not drop the affected jobs
+
+#### Scenario: Rate budget runs low before 429
+- **WHEN** Raindrop responses report `X-RateLimit-Remaining` at or below the reserve threshold
+- **THEN** the engine stops the current drain/reconcile tick and pauses until reset
+- **AND** heartbeats skip Raindrop work until the pause ends
+
+#### Scenario: Idle heartbeat does not re-list every minute
+- **WHEN** a bidirectional reconcile cycle has completed successfully
+- **AND** the heartbeat fires again within the configured reconcile cooldown
+- **AND** no in-progress cursor remains
+- **THEN** the engine skips starting a new Raindrop listing pass
+- **AND** a user-triggered "Reconcile now" still runs immediately
+
+#### Scenario: Delete-confirm GETs are capped per tick
+- **WHEN** reconcile finishes a listing pass with many paired raindrops absent from the listing
+- **THEN** at most a bounded number of `GET /raindrop/{id}` confirms run that tick
+- **AND** remaining candidates are left for a later tick (no false Edge deletes)
+- **AND** a durable rotating offset ensures deferred candidates are checked on subsequent cycles
+
+#### Scenario: Manual reconcile skip reasons are distinct
+- **WHEN** reconcile is skipped because another pass is in flight, a rate-limit pause is active, or heartbeat cooldown applies
+- **THEN** the result includes a machine-readable `reason` (`busy`, `rate_limited`, or `cooldown`)
+- **AND** the Options/popup UI surfaces a matching message instead of always saying "already running"
+
+#### Scenario: Manual reconcile applies the global rate-limit gate
+- **WHEN** a user-triggered "Reconcile now" hits HTTP 429 or a proactive rate-budget pause
+- **THEN** the engine sets the same global Raindrop pause used by the heartbeat
+- **AND** defers due queue jobs until that pause ends
+- **AND** returns a `rate_limited` skip result to the Options/popup UI
 
 #### Scenario: Worker restarts during backfill
 - **WHEN** the service worker restarts partway through a backfill

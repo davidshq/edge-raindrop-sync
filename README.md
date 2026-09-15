@@ -33,14 +33,16 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   on pull (`create-as-needed`, default), skipped entirely (`existing-only`, no
   catch-all), or empty Raindrop collections are mirrored too (`mirror-all`).
   Under **Folder policies**, expand **Choose Raindrop-only collections to sync**
-  to opt in specific Raindrop-only paths; an empty allowlist leaves those three
-  modes unchanged, while a non-empty allowlist limits Raindrop-only creates to
-  checked collections (Edge paths that already exist still sync). Use
-  **Clear selection** then **Save folder policies** to leave selective mode.
-  Stale allowlist entries are pruned on reconcile/Refresh once their Edge paths
-  exist (or the Raindrop collection is gone). Items stored directly in the
-  Raindrop root (not a child collection) are not listed for opt-in; they pull
-  when that Edge mirror folder already exists.
+  to opt in Raindrop folders that are not fully in Edge (entire Raindrop account,
+  not only under the sync root). An empty allowlist leaves the three folder modes
+  unchanged under the sync root; a non-empty allowlist limits Raindrop-only
+  creates to checked collections (Edge-existing paths still sync). Outside-root
+  picks land under Other favorites / Raindrop. Drops back into those Edge folders
+  upload into the matching account-level Raindrop collection (not under the sync
+  root). Use **Select all** to opt in every listed collection, or **Clear
+  selection** then **Save folder policies** to leave selective mode. Allowlist
+  entries are dropped only when the Raindrop collection is gone — not when
+  folders finish mirroring.
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
   Raindrop tags, notes, highlights, covers, and excerpts are never overwritten
   from Edge.
@@ -49,6 +51,16 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   periods, rate limits, and the ephemeral service worker can never lose a
   bookmark or double-upload one. Queue/pair/suppress writes are serialized in
   the worker; drain/reconcile are awaited so the SW is not killed mid-write.
+  Raindrop work pauses globally on HTTP 429 *or* when `X-RateLimit-Remaining`
+  runs low, with per-tick caps on list pages, queue jobs, and delete-confirm
+  GETs so a large library cannot stampede the API. The 1-minute heartbeat still
+  drains the queue; full bidirectional reconcile cools down for 15 minutes after
+  a completed cycle (manual **Reconcile now** always runs).
+- **Activity log** — Options → Status shows the newest **500** lines from
+  `chrome.storage.local`. Enable **Keep long-term activity log** (Save settings)
+  to also append into an IndexedDB archive (soft-capped at 50 000). Export or
+  clear the archive from Status; turning the setting off stops new writes but
+  does not wipe existing archive data.
 
 ## Setup
 
@@ -117,6 +129,7 @@ src/
   lib/
     constants.js           policies, sync modes, MSG, storage keys, defaults
     store.js               chrome.storage.local (config, pairs, tombstones, status)
+    log-archive.js         opt-in IndexedDB long-term activity log
     queue.js               durable typed job queue with backoff
     mutex.js               in-process lock for storage RMW (queue/pairs/suppress)
     raindrop.js            Raindrop client (create/list/update/delete)

@@ -1,14 +1,17 @@
 // Raindrop collection allowlist for selective Raindrop-only sync.
 //
 // When the allowlist is non-empty, Raindrop-only paths (missing in Edge) sync
-// only if the raindrop's collection or an ancestor under the root is listed.
-// Edge paths that already exist bypass the allowlist. Empty allowlist leaves
-// raindropFolderMode behavior unchanged.
+// only if the raindrop's collection or an ancestor is listed (under the sync
+// root or elsewhere in the account). Edge paths that already exist bypass the
+// allowlist. Empty allowlist leaves raindropFolderMode behavior unchanged
+// (still scoped to the sync root only).
 //
-// Stale entries (deleted collections, or subtrees fully present in Edge) are
-// pruned so selective mode cannot stick on after everything has mirrored.
+// Stale entries (collections deleted from Raindrop) are pruned. Fully mirrored
+// subtrees stay on the allowlist until the user clears selection — selective
+// mode must not auto-exit and undo a saved opt-in (especially with
+// existing-only, where an empty allowlist skips all Raindrop-only creates).
 
-import { collectionsUnderRoot, getById } from "./collections.js";
+import { getById } from "./collections.js";
 import { RAINDROP_FOLDER_MODE } from "./constants.js";
 
 /**
@@ -20,10 +23,12 @@ export function isAllowlistActive(allowlist) {
 }
 
 /**
- * True if `collectionId` or any ancestor under `rootId` is on the allowlist.
+ * True if `collectionId` or any ancestor is on the allowlist.
+ * When walking hits `rootId` without a match, stops (sync root is not an
+ * implicit allow). Collections outside the sync root walk to the Raindrop top.
  * @param {string|number|null|undefined} collectionId
  * @param {{ byId: Map }} index
- * @param {string|number} rootId
+ * @param {string|number|null|undefined} rootId
  * @param {Record<string, { path?: string }>|null|undefined} allowlist
  */
 export function isCollectionAllowed(collectionId, index, rootId, allowlist) {
@@ -37,7 +42,7 @@ export function isCollectionAllowed(collectionId, index, rootId, allowlist) {
     seen.add(current._id);
     const key = String(current._id);
     if (allowlist[key] || allowlist[current._id]) return true;
-    if (String(current._id) === String(rootId)) return false;
+    if (rootId != null && String(current._id) === String(rootId)) return false;
     const parentId = current.parent?.$id;
     if (parentId == null) return false;
     current = getById(index, parentId);
@@ -75,45 +80,38 @@ export function canCreateRaindropOnlyPath(opts) {
   } = opts;
   if (edgePathExists) return true;
   if (isAllowlistActive(allowlist)) {
-    if (rootId == null || !index) return false;
+    if (!index) return false;
     return isCollectionAllowed(collectionId, index, rootId, allowlist);
   }
   return folderMode !== existingOnlyValue;
 }
 
 /**
- * Keep only allowlist ids that still cover at least one not-yet-mirrored
- * collection under the root. Drops deleted/moved ids and fully-mirrored trees
- * so an empty allowlist (and normal folder modes) can return.
+ * Drop allowlist ids whose Raindrop collection no longer exists.
+ * Does not remove fully-mirrored entries — use Clear selection to leave
+ * selective mode. Keeping live ids also preserves outside-root pairs (those
+ * raindrops are outside the nested root listing; delete detection relies on
+ * the allowlist pass).
+ *
+ * `rootId` / `edgePathExists` are accepted for call-site compatibility but
+ * unused: membership is solely "id still in the live index".
  *
  * @param {Record<string, { path?: string }>|null|undefined} allowlist
  * @param {{ byId: Map, byParent?: Map }} index
- * @param {string|number} rootId
- * @param {(relativeSegments: string[]) => boolean|Promise<boolean>} edgePathExists
+ * @param {string|number|null|undefined} [_rootId]
+ * @param {(relativeSegments: string[]) => boolean|Promise<boolean>} [_edgePathExists]
  * @returns {Promise<{ allowlist: Record<string, { path?: string }>, removed: number }>}
  */
-export async function pruneAllowlist(allowlist, index, rootId, edgePathExists) {
+export async function pruneAllowlist(allowlist, index, _rootId, _edgePathExists) {
   const src = allowlist && typeof allowlist === "object" ? allowlist : {};
   const keys = Object.keys(src);
   if (!keys.length) return { allowlist: {}, removed: 0 };
 
-  const under = collectionsUnderRoot(index, rootId);
   const next = {};
   let removed = 0;
-
   for (const id of keys) {
-    const singleton = { [id]: src[id] };
-    let stillNeeded = false;
-    for (const { collectionId, relativeSegments } of under) {
-      if (!relativeSegments.length) continue;
-      if (!isCollectionAllowed(collectionId, index, rootId, singleton)) continue;
-      if (await edgePathExists(relativeSegments)) continue;
-      stillNeeded = true;
-      break;
-    }
-    if (stillNeeded) next[id] = src[id];
+    if (getById(index, id)) next[id] = src[id];
     else removed++;
   }
-
   return { allowlist: next, removed };
 }
