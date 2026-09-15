@@ -8,6 +8,8 @@
 //   AuthError      -> token bad/expired: halt deletions, keep jobs queued.
 //   RateLimitError -> HTTP 429 *or* remaining budget exhausted: back off until
 //                     `retryAt`, keep jobs queued. Prefer pausing before 429.
+//
+// X-RateLimit-Reset is normalized once via #parseResetAt (epoch ms or seconds).
 
 import {
   RAINDROP_API,
@@ -89,17 +91,25 @@ export class RaindropClient {
     }
   }
 
+  /**
+   * Parse X-RateLimit-Reset to epoch ms. Raindrop usually sends seconds;
+   * values already in ms (> 1e12) pass through unchanged.
+   * @returns {number|null}
+   */
+  #parseResetAt(res) {
+    const reset = res.headers.get("X-RateLimit-Reset");
+    if (reset == null || Number.isNaN(Number(reset))) return null;
+    const n = Number(reset);
+    return n > 1e12 ? n : n * 1000;
+  }
+
   #noteRateHeaders(res) {
     const remaining = res.headers.get("X-RateLimit-Remaining");
     if (remaining != null && !Number.isNaN(Number(remaining))) {
       this._remaining = Number(remaining);
     }
-    const reset = res.headers.get("X-RateLimit-Reset");
-    if (reset != null && !Number.isNaN(Number(reset))) {
-      // Raindrop spike: reset is epoch seconds.
-      const resetSec = Number(reset);
-      this._resetAt = resetSec > 1e12 ? resetSec : resetSec * 1000;
-    }
+    const resetAt = this.#parseResetAt(res);
+    if (resetAt != null) this._resetAt = resetAt;
   }
 
   #retryAfterMs(res) {
@@ -107,10 +117,8 @@ export class RaindropClient {
     if (retryAfter && !Number.isNaN(Number(retryAfter))) {
       return Number(retryAfter) * 1000;
     }
-    const reset = res.headers.get("X-RateLimit-Reset");
-    if (reset && !Number.isNaN(Number(reset))) {
-      const resetSec = Number(reset);
-      const resetAt = resetSec > 1e12 ? resetSec : resetSec * 1000;
+    const resetAt = this.#parseResetAt(res);
+    if (resetAt != null) {
       const ms = resetAt - Date.now();
       if (ms > 0) return ms;
     }

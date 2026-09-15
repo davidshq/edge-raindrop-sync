@@ -10,6 +10,10 @@
 // Rate-limit posture: shared page budget for root + outside-root listing; capped
 // GET /raindrop confirms during delete detection; stop early when the client
 // reports low X-RateLimit-Remaining (throws RateLimitError for sync to gate).
+//
+// Mid-cycle exits share checkpointOutsidePending / finishReconcileCycle so
+// durable reconcile-state fields cannot drift between the resume and root→outside
+// completion paths.
 
 import { JOB, SYNC_MODE, RAINDROP_FOLDER_MODE, MAX_RECONCILE_PAGES_PER_TICK, MAX_ALIVE_CHECKS_PER_TICK, MIN_RECONCILE_INTERVAL_MS } from "./constants.js";
 import {
@@ -181,18 +185,12 @@ async function reconcileOnce({ force }) {
       enqueued += outside.enqueued;
       pages += outside.pages;
       if (!outside.done) {
-        await mergeSeenAcc(seenIds);
-        await setReconcileState({
-          running: false,
-          cursorPage: 0,
+        return checkpointOutsidePending({
+          seenIds,
           outsideCursor: outside.cursor,
-          lastRunAt: Date.now(),
+          enqueued,
+          pages,
         });
-        // Quiet when idle progress — heartbeat used to spam this every minute.
-        if (enqueued > 0) {
-          await appendLog("info", `Reconcile queued ${enqueued} pull(s); outside-root pages pending.`);
-        }
-        return { enqueued, pages, done: false };
       }
       outsideCursor = null;
       await setReconcileState({ outsideCursor: null });
@@ -226,46 +224,30 @@ async function reconcileOnce({ force }) {
               enqueued += outside.enqueued;
               pages += outside.pages;
               if (!outside.done) {
-                await mergeSeenAcc(seenIds);
-                await setReconcileState({
-                  running: false,
-                  cursorPage: 0,
+                return checkpointOutsidePending({
+                  seenIds,
                   outsideCursor: outside.cursor,
-                  lastRunAt: Date.now(),
+                  enqueued,
+                  pages,
                 });
-                if (enqueued > 0) {
-                  await appendLog(
-                    "info",
-                    `Reconcile queued ${enqueued} pull(s); outside-root pages pending.`
-                  );
-                }
-                return { enqueued, pages, done: false };
               }
             }
           }
 
-          await finishDeleteDetection(client, seenIds, pairs);
-          await ensureAllowlistedOrMirrorAll(
+          return finishReconcileCycle({
+            client,
+            seenIds,
+            pairs,
             index,
-            root._id,
+            rootId: root._id,
             config,
             overrides,
             topRoots,
             folderMode,
-            allowlist
-          );
-          await setReconcileState({
-            running: false,
-            cursorPage: 0,
-            outsideCursor: null,
-            lastRunAt: Date.now(),
-            lastError: null,
-            seenAcc: null,
+            allowlist,
+            enqueued,
+            pages,
           });
-          if (enqueued > 0) {
-            await appendLog("info", `Reconcile queued ${enqueued} pull(s).`);
-          }
-          return { enqueued, pages, done: true };
         }
 
         page++;
@@ -282,28 +264,20 @@ async function reconcileOnce({ force }) {
     }
 
     // outsideCursor path finished above → delete detection + ensure.
-    await finishDeleteDetection(client, seenIds, pairs);
-    await ensureAllowlistedOrMirrorAll(
+    return finishReconcileCycle({
+      client,
+      seenIds,
+      pairs,
       index,
-      root._id,
+      rootId: root._id,
       config,
       overrides,
       topRoots,
       folderMode,
-      allowlist
-    );
-    await setReconcileState({
-      running: false,
-      cursorPage: 0,
-      outsideCursor: null,
-      lastRunAt: Date.now(),
-      lastError: null,
-      seenAcc: null,
+      allowlist,
+      enqueued,
+      pages,
     });
-    if (enqueued > 0) {
-      await appendLog("info", `Reconcile queued ${enqueued} pull(s).`);
-    }
-    return { enqueued, pages, done: true };
   } catch (err) {
     await setReconcileState({ running: false, lastError: err.message });
     throw err;
@@ -404,6 +378,69 @@ async function mergeSeenAcc(seenIds) {
   const acc = new Set(state.seenAcc || []);
   for (const id of seenIds) acc.add(id);
   await setReconcileState({ seenAcc: [...acc] });
+}
+
+/**
+ * Persist outside-root progress and end the tick without delete detection.
+ * Used by both the resume path and root→outside handoff so cursor fields stay aligned.
+ * Quiet when idle (enqueued === 0) — heartbeat used to spam this every minute.
+ * @returns {{ enqueued: number, pages: number, done: false }}
+ */
+async function checkpointOutsidePending({ seenIds, outsideCursor, enqueued, pages }) {
+  await mergeSeenAcc(seenIds);
+  await setReconcileState({
+    running: false,
+    cursorPage: 0,
+    outsideCursor,
+    lastRunAt: Date.now(),
+  });
+  if (enqueued > 0) {
+    await appendLog("info", `Reconcile queued ${enqueued} pull(s); outside-root pages pending.`);
+  }
+  return { enqueued, pages, done: false };
+}
+
+/**
+ * End a full reconcile cycle: delete detection, empty-folder ensure, clear cursors.
+ * Shared by root-listing completion and outside-root completion.
+ * @returns {{ enqueued: number, pages: number, done: true }}
+ */
+async function finishReconcileCycle({
+  client,
+  seenIds,
+  pairs,
+  index,
+  rootId,
+  config,
+  overrides,
+  topRoots,
+  folderMode,
+  allowlist,
+  enqueued,
+  pages,
+}) {
+  await finishDeleteDetection(client, seenIds, pairs);
+  await ensureAllowlistedOrMirrorAll(
+    index,
+    rootId,
+    config,
+    overrides,
+    topRoots,
+    folderMode,
+    allowlist
+  );
+  await setReconcileState({
+    running: false,
+    cursorPage: 0,
+    outsideCursor: null,
+    lastRunAt: Date.now(),
+    lastError: null,
+    seenAcc: null,
+  });
+  if (enqueued > 0) {
+    await appendLog("info", `Reconcile queued ${enqueued} pull(s).`);
+  }
+  return { enqueued, pages, done: true };
 }
 
 async function finishDeleteDetection(client, seenIds, pairs) {
