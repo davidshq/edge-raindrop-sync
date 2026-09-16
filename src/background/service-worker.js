@@ -57,6 +57,7 @@ chrome.bookmarks.onCreated.addListener((id, node) => {
 });
 
 // User deletes: propagate to Raindrop when bidirectional (unless policy-suppressed).
+// Folder deletes: Chromium fires once; sync walks removeInfo.node for child URLs.
 chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
   void handleBookmarkRemoved(id, removeInfo).catch((err) => logSwError("onRemoved", err));
 });

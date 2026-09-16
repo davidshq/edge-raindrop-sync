@@ -24,10 +24,14 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 - **Instant local delete** — under offload / `sync-and-delete`, the bookmark is
   removed from Edge the instant Raindrop confirms the copy (never before). That
   cleanup **does not** delete the Raindrop copy, including in bidirectional mode.
+  The pair is cleared and an `edge-offload` tombstone is recorded so reconcile
+  cannot pull the item back into Edge.
 - **Bidirectional pull** — when enabled, raindrops under the root appear as Edge
   bookmarks (link/article style items only — uploaded files/documents are skipped);
   deleting on either side removes the pair (with tombstones so items don't
-  resurrect). Stale `pull-create` jobs also bail if a tombstone exists or a
+  resurrect). **Folder deletes** walk Chromium's single `onRemoved` payload
+  (`removeInfo.node`) so every paired child still propagates to Raindrop.
+  Stale `pull-create` jobs also bail if a tombstone exists or a
   delete for that raindrop is already queued. **Raindrop → Edge folders**
   (Options, bidirectional only) chooses whether missing Edge folders are created
   on pull (`create-as-needed`, default), skipped entirely (`existing-only`, no
@@ -155,11 +159,13 @@ scripts/
   GUID, so the extension keys pairs and policy overrides on the bookmark node
   `id`, which is stable across restarts and survives renames/moves.
 - **Auth:** uses a personal test token (no OAuth). Single-user, sideloaded.
-- **Deletes in bidirectional mode:** only **user** deletes propagate. Folder
+- **Deletes in bidirectional mode:** only **user** deletes propagate (including
+  every paired bookmark under a deleted folder via `removeInfo.node`). Folder
   **Offload** (`sync-and-delete`) still means “remove from Edge after upload”
-  and leaves Raindrop intact (with all rich metadata). The options UI does not
-  offer offload as the bidirectional *global* default — that mode keeps both
-  sides by default. Stale stored `sync-and-delete` under bidirectional is
-  coerced to keep-both on read/save so the engine matches the UI.
+  and leaves Raindrop intact (with all rich metadata), clearing the pair and
+  writing an `edge-offload` tombstone so pull cannot undo it. The options UI
+  does not offer offload as the bidirectional *global* default — that mode
+  keeps both sides by default. Stale stored `sync-and-delete` under
+  bidirectional is coerced to keep-both on read/save so the engine matches the UI.
 - **Out of scope for now:** re-syncing title/URL/moves via `onChanged`/`onMoved`,
   OAuth, and publishing to the Edge Add-ons store.

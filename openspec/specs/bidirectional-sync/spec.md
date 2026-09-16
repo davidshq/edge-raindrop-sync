@@ -62,13 +62,19 @@ When sync mode is `bidirectional`, Raindrop→Edge ingest SHALL apply the config
 - **THEN** Edge folders are ensured for Raindrop collections under the root that have no items, subject to exclude rules
 
 ### Requirement: User delete propagates Edge to Raindrop
-When sync mode is `bidirectional` and the user removes a mapped Edge bookmark, the system SHALL delete the paired raindrop in Raindrop after confirming the mapping, then record a tombstone and clear the pair.
+When sync mode is `bidirectional` and the user removes a mapped Edge bookmark, the system SHALL delete the paired raindrop in Raindrop after confirming the mapping, then record a tombstone and clear the pair. When the user removes a folder, Chromium fires a single `onRemoved` for the folder (not for each child); the system SHALL walk `removeInfo.node` and enqueue Raindrop deletes for every paired URL bookmark in that tree.
 
 #### Scenario: User deletes mapped bookmark in Edge
 - **WHEN** bidirectional mode is on and the user deletes an Edge bookmark that has a pair mapping
 - **THEN** the paired raindrop is deleted via the Raindrop API
 - **AND** a tombstone is recorded so reconcile does not recreate it
 - **AND** the pair mapping is removed
+
+#### Scenario: User deletes a folder of mapped bookmarks
+- **WHEN** bidirectional mode is on and the user deletes an Edge folder
+- **AND** `onRemoved` supplies the folder's `node` tree (Chromium recursive payload)
+- **THEN** each paired URL bookmark under that tree enqueues a Raindrop delete
+- **AND** tombstones and pair clears apply per child as for a single bookmark delete
 
 #### Scenario: Unmapped Edge delete
 - **WHEN** the user deletes an Edge bookmark with no pair mapping
@@ -84,13 +90,15 @@ When sync mode is `bidirectional` and reconcile detects that a mapped raindrop n
 - **AND** the pair mapping is removed
 
 ### Requirement: Policy-driven local cleanup does not delete Raindrop
-When the extension removes an Edge bookmark because of `sync-and-delete` after a confirmed upload, that removal SHALL NOT cause a Raindrop delete, even if sync mode is `bidirectional`.
+When the extension removes an Edge bookmark because of `sync-and-delete` after a confirmed upload, that removal SHALL NOT cause a Raindrop delete, even if sync mode is `bidirectional`. After the Edge remove, the pair mapping SHALL be cleared and a tombstone with reason `edge-offload` SHALL be recorded so reconcile cannot pull the Raindrop copy back into Edge.
 
 #### Scenario: Sync-and-delete after upload in bidirectional mode
 - **WHEN** bidirectional mode is on and a bookmark's effective policy is `sync-and-delete`
 - **AND** its Raindrop create is confirmed and the extension removes the Edge bookmark
 - **THEN** the Raindrop copy remains
 - **AND** no Raindrop delete job is enqueued for that pair
+- **AND** the pair mapping is cleared
+- **AND** an `edge-offload` tombstone blocks Raindrop→Edge re-ingest of that raindrop
 
 ### Requirement: Raindrop-rich metadata is never overwritten from Edge
 Edge→Raindrop writes SHALL only set Edge-owned fields (`link`, `title`, `collection` placement, and optionally `pleaseParse` on create). The system MUST NOT send or clear Raindrop-only fields such as tags, notes, highlights, covers, or excerpts on create or update.

@@ -4,6 +4,14 @@
 // confirmed and pair/tombstone state persisted BEFORE any matching local
 // deletion. Policy-driven Edge cleanup never cascades into a Raindrop delete.
 // Effective `exclude` blocks upload, ingest, and delete propagation both ways.
+//
+// Folder deletes: Chromium fires one onRemoved for the folder (none for
+// contents). handleBookmarkRemoved walks removeInfo.node so every paired URL
+// under the folder still enqueues a Raindrop delete.
+//
+// Offload (sync-and-delete): after Edge remove, clear the pair and tombstone
+// with reason edge-offload so reconcile cannot pull the item back, without
+// leaving a zombie bookmarkId in the pair map.
 
 import { POLICY, JOB, SYNC_MODE, RAINDROP_FOLDER_MODE, MAX_JOBS_PER_DRAIN } from "./constants.js";
 import {
@@ -279,9 +287,18 @@ async function processUpload(job, ctx) {
 
   if (effective === POLICY.SYNC_DELETE) {
     const parentId = node.parentId;
+    const rid = await getRaindropId(job.id);
     // Suppress so onRemoved does not enqueue a Raindrop delete in bidirectional mode.
     await suppressRemove(job.id);
     await removeNode(job.id);
+    // Drop the pair (bookmark id is gone) and tombstone so bidirectional pull
+    // cannot undo the offload. Raindrop copy is intentionally kept.
+    if (rid) {
+      await addTombstone(rid, "edge-offload");
+      await forgetPairByRaindrop(rid);
+    } else {
+      await forgetSynced(job.id);
+    }
     if (config.pruneEmpty) await pruneIfEmpty(parentId, config, overrides);
   }
 
@@ -431,11 +448,51 @@ async function processDeleteEdge(job, ctx) {
 }
 
 /**
- * Handle a user (or extension) remove of an Edge bookmark.
- * Policy-suppressed removes are ignored; mapped user deletes enqueue Raindrop delete
- * unless the bookmark lived under an effective `exclude` policy.
+ * URL nodes removed by an onRemoved event.
+ * Chromium notifies once for a folder delete and embeds the tree in
+ * `removeInfo.node` — walk it so nested bookmarks are not orphaned in Raindrop.
+ *
+ * @param {string} removedId
+ * @param {{ parentId?: string, node?: object }} [removeInfo]
+ * @returns {{ id: string, pathFolderIds: string[], liveParentId: string|null }[]}
+ *   `pathFolderIds` is nearest-first folders inside the deleted tree;
+ *   `liveParentId` is the still-existing parent of the removed root.
+ */
+export function collectRemovedUrlNodes(removedId, removeInfo) {
+  const tree = removeInfo?.node;
+  const liveParentId =
+    removeInfo?.parentId != null && removeInfo.parentId !== ""
+      ? String(removeInfo.parentId)
+      : null;
+
+  if (!tree) {
+    return [{ id: String(removedId), pathFolderIds: [], liveParentId }];
+  }
+
+  const out = [];
+  const walk = (n, folderAncestorsNearestFirst) => {
+    if (n.url) {
+      out.push({
+        id: String(n.id),
+        pathFolderIds: folderAncestorsNearestFirst,
+        liveParentId,
+      });
+      return;
+    }
+    const next = [String(n.id), ...folderAncestorsNearestFirst];
+    for (const c of n.children ?? []) walk(c, next);
+  };
+  walk(tree, []);
+  return out;
+}
+
+/**
+ * Handle a user (or extension) remove of an Edge bookmark or folder.
+ * Policy-suppressed removes are ignored; mapped user deletes enqueue Raindrop
+ * delete unless the bookmark lived under an effective `exclude` policy.
+ * Folder deletes walk `removeInfo.node` (Chromium's recursive payload).
  * @param {string} bookmarkId
- * @param {{ parentId?: string }} [removeInfo] from chrome.bookmarks.onRemoved
+ * @param {{ parentId?: string, node?: object }} [removeInfo] from chrome.bookmarks.onRemoved
  */
 export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
   if (await consumeRemoveSuppression(bookmarkId)) return;
@@ -443,27 +500,44 @@ export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
   const config = await getConfig();
   if (config.syncMode !== SYNC_MODE.BIDIRECTIONAL) return;
 
-  const raindropId = await getRaindropId(bookmarkId);
-  if (!raindropId) return;
+  const targets = collectRemovedUrlNodes(bookmarkId, removeInfo);
+  if (!targets.length) return;
 
-  // Prefer parent chain from removeInfo — the bookmark node is already gone.
-  if (removeInfo?.parentId) {
-    const overrides = await getOverrides();
-    const ancestorIds = await ancestorIdsFromFolder(removeInfo.parentId);
+  const overrides = await getOverrides();
+  let queued = 0;
+
+  for (const target of targets) {
+    const raindropId = await getRaindropId(target.id);
+    if (!raindropId) continue;
+
+    const liveAncestors = target.liveParentId
+      ? await ancestorIdsFromFolder(target.liveParentId)
+      : [];
+    const ancestorIds = [...target.pathFolderIds, ...liveAncestors];
     if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
-      await appendLog("info", `Skipped Raindrop delete for excluded Edge bookmark ${bookmarkId}.`);
-      return;
+      await appendLog(
+        "info",
+        `Skipped Raindrop delete for excluded Edge bookmark ${target.id}.`
+      );
+      continue;
+    }
+
+    const added = await queue.enqueueJob({
+      id: `dr-${raindropId}`,
+      kind: JOB.DELETE_RAINDROP,
+      raindropId,
+      bookmarkId: target.id,
+    });
+    if (added) {
+      queued++;
+      await appendLog(
+        "info",
+        `Queued Raindrop delete for removed Edge bookmark ${target.id}.`
+      );
     }
   }
 
-  await queue.enqueueJob({
-    id: `dr-${raindropId}`,
-    kind: JOB.DELETE_RAINDROP,
-    raindropId,
-    bookmarkId,
-  });
-  await appendLog("info", `Queued Raindrop delete for removed Edge bookmark ${bookmarkId}.`);
-  await drain();
+  if (queued > 0) await drain();
 }
 
 /**

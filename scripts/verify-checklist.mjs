@@ -488,7 +488,67 @@ async function scenario63_bidirectional() {
   assert.equal(!!findEdgeByUrl("https://example.com/ers-verify-remote-del"), false, "Edge deleted");
   assert.equal(await eng.store.hasTombstone(String(remote2._id)), true);
 
-  console.log("  ✔ pull, deletes, tombstone, stale/pending pull guards");
+  // Folder delete: Chromium fires once for the folder with node tree — children
+  // must still propagate Raindrop deletes (no per-child onRemoved).
+  const edgeFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Verify-Folder-Del",
+  });
+  const edgeSub = await chrome.bookmarks.create({
+    parentId: edgeFolder.id,
+    title: "Nested",
+  });
+  const childA = await chrome.bookmarks.create({
+    parentId: edgeSub.id,
+    title: "folder-del-a",
+    url: "https://example.com/ers-verify-folder-del-a",
+  });
+  const childB = await chrome.bookmarks.create({
+    parentId: edgeFolder.id,
+    title: "folder-del-b",
+    url: "https://example.com/ers-verify-folder-del-b",
+  });
+  await eng.queue.enqueueMany([childA.id, childB.id]);
+  await eng.sync.drain();
+  const ridA = await eng.store.getRaindropId(childA.id);
+  const ridB = await eng.store.getRaindropId(childB.id);
+  assert.ok(ridA && ridB, "both children paired before folder delete");
+
+  const folderNode = {
+    id: edgeFolder.id,
+    title: edgeFolder.title,
+    children: [
+      {
+        id: edgeSub.id,
+        title: "Nested",
+        children: [
+          {
+            id: childA.id,
+            title: childA.title,
+            url: childA.url,
+            parentId: edgeSub.id,
+          },
+        ],
+      },
+      {
+        id: childB.id,
+        title: childB.title,
+        url: childB.url,
+        parentId: edgeFolder.id,
+      },
+    ],
+  };
+  await eng.sync.handleBookmarkRemoved(edgeFolder.id, {
+    parentId: "1",
+    node: folderNode,
+  });
+  await eng.sync.drain();
+  assert.equal(mock._raindrops.has(Number(ridA)), false, "child A raindrop deleted");
+  assert.equal(mock._raindrops.has(Number(ridB)), false, "child B raindrop deleted");
+  assert.equal(await eng.store.hasTombstone(String(ridA)), true, "child A tombstoned");
+  assert.equal(await eng.store.hasTombstone(String(ridB)), true, "child B tombstoned");
+
+  console.log("  ✔ pull, deletes, tombstone, stale/pending pull guards, folder delete");
 }
 
 async function scenario64_syncAndDelete() {
@@ -538,15 +598,30 @@ async function scenario64_syncAndDelete() {
   only.note = "user-note";
 
   assert.equal(!!findEdgeByUrl("https://example.com/ers-verify-sad"), false, "Edge removed");
-  assert.ok(
-    (await eng.store.getRaindropId(bm.id)) ||
-      (await eng.store.getBookmarkIdForRaindrop(String(only._id))),
-    "pair retained"
+  assert.equal(await eng.store.getRaindropId(bm.id), null, "pair cleared after offload");
+  assert.equal(
+    await eng.store.getBookmarkIdForRaindrop(String(only._id)),
+    null,
+    "reverse pair cleared after offload"
+  );
+  assert.equal(
+    await eng.store.hasTombstone(String(only._id)),
+    true,
+    "offload tombstone blocks re-pull"
   );
   // Policy remove must not delete Raindrop
   assert.equal(only.tags[0], "user-tag");
   assert.equal(only.note, "user-note");
   assert.equal(mock._trash.size, 0, "not trashed by policy delete");
+
+  // Bidirectional reconcile must not bring the offloaded item back
+  await eng.reconcile.reconcile();
+  await eng.sync.drain();
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-sad"),
+    false,
+    "tombstone blocks re-pull after offload"
+  );
 
   // Stale storage heal: raw sync-and-delete under bidirectional is fixed on read
   await chrome.storage.local.set({
@@ -561,7 +636,7 @@ async function scenario64_syncAndDelete() {
   const healed = await eng.store.getConfig();
   assert.equal(healed.defaultPolicy, POLICY.SYNC_KEEP, "getConfig heals stale offload");
 
-  console.log("  ✔ Edge gone via folder offload; Raindrop kept; stale global coerced");
+  console.log("  ✔ Edge gone via folder offload; Raindrop kept; pair cleared + tombstone");
 }
 
 async function scenario65_exclude() {
