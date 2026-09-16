@@ -238,7 +238,7 @@ function makeMockRaindrop() {
     },
     async updateRaindrop(id, patch) {
       const item = raindrops.get(Number(id));
-      if (!item) throw new Error("missing");
+      if (!item) throw new Error(`Raindrop PUT /raindrop/${id} failed: 404`);
       if (patch.link != null) item.link = patch.link;
       if (patch.title != null) item.title = patch.title;
       if (patch.collectionId != null) item.collection = { $id: patch.collectionId };
@@ -1266,6 +1266,207 @@ async function scenario68_rateLimitBudget() {
   console.log("  ✔ global gate, capped confirms, round-robin, skip reasons, cooldown, reconcileNow gate");
 }
 
+async function scenario69_bookmarkMoves() {
+  console.log("\n== 6.9 Edge bookmark moves update Raindrop placement ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, JOB } = eng.constants;
+  await resetAll(eng.store);
+  const mock = makeMockRaindrop();
+  patchClient(eng.raindropMod, mock);
+
+  const rootName = "ERS-Verify-Moves";
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+  });
+
+  const srcFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Move-Src",
+  });
+  const destFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Move-Dest",
+  });
+  const bm = await chrome.bookmarks.create({
+    parentId: srcFolder.id,
+    title: "ERS move me",
+    url: "https://example.com/ers-verify-move",
+  });
+
+  await eng.queue.enqueue(bm.id);
+  await eng.sync.drain();
+  assert.equal(mock._raindrops.size, 1, "initial upload");
+  const rid = await eng.store.getRaindropId(bm.id);
+  assert.ok(rid, "paired after upload");
+  const beforeItem = mock._raindrops.get(Number(rid));
+  beforeItem.tags = ["keep-me"];
+  beforeItem.note = "rich-note";
+  const oldCollectionId = beforeItem.collection.$id;
+
+  // Same-parent reorder → no enqueue
+  const qBeforeReorder = await eng.queue.size();
+  await eng.sync.handleBookmarkMoved(bm.id, {
+    oldParentId: srcFolder.id,
+    parentId: srcFolder.id,
+  });
+  assert.equal(await eng.queue.size(), qBeforeReorder, "reorder does not enqueue");
+  assert.equal(
+    mock._raindrops.get(Number(rid)).collection.$id,
+    oldCollectionId,
+    "reorder does not change collection"
+  );
+
+  // Parent change → update collection, preserve rich fields, no delete job
+  bookmarks.get(bm.id).parentId = destFolder.id;
+  await eng.sync.handleBookmarkMoved(bm.id, {
+    oldParentId: srcFolder.id,
+    parentId: destFolder.id,
+  });
+  const afterMove = mock._raindrops.get(Number(rid));
+  assert.ok(afterMove, "same raindrop id after move");
+  assert.notEqual(afterMove.collection.$id, oldCollectionId, "collection updated");
+  assert.deepEqual(afterMove.tags, ["keep-me"], "tags intact");
+  assert.equal(afterMove.note, "rich-note", "note intact");
+  assert.equal(await eng.store.getRaindropId(bm.id), String(rid), "pair retained");
+  const jobsAfterMove = await eng.queue.list();
+  assert.equal(
+    jobsAfterMove.some((j) => eng.queue.jobKind(j) === JOB.DELETE_RAINDROP),
+    false,
+    "move does not enqueue delete-raindrop"
+  );
+  const log = await eng.store.getLog();
+  assert.ok(
+    log.some((e) => typeof e.message === "string" && e.message.startsWith("Moved:")),
+    "activity logs Moved:"
+  );
+
+  // Folder move fans out to nested URL bookmarks
+  const nest = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Move-Nest",
+  });
+  const nestChild = await chrome.bookmarks.create({
+    parentId: nest.id,
+    title: "ERS-Move-Nest-Child",
+  });
+  const bmA = await chrome.bookmarks.create({
+    parentId: nestChild.id,
+    title: "nested A",
+    url: "https://example.com/ers-verify-move-a",
+  });
+  const bmB = await chrome.bookmarks.create({
+    parentId: nest.id,
+    title: "nested B",
+    url: "https://example.com/ers-verify-move-b",
+  });
+  await eng.queue.enqueueMany([bmA.id, bmB.id]);
+  await eng.sync.drain();
+  const ridA = await eng.store.getRaindropId(bmA.id);
+  const ridB = await eng.store.getRaindropId(bmB.id);
+  const nestDest = await chrome.bookmarks.create({
+    parentId: "2",
+    title: "ERS-Move-Nest-Dest",
+  });
+  bookmarks.get(nest.id).parentId = nestDest.id;
+  await eng.sync.handleBookmarkMoved(nest.id, {
+    oldParentId: "1",
+    parentId: nestDest.id,
+  });
+  const colA = mock._raindrops.get(Number(ridA)).collection.$id;
+  const colB = mock._raindrops.get(Number(ridB)).collection.$id;
+  assert.ok(colA, "nested A still has collection");
+  assert.ok(colB, "nested B still has collection");
+  // Both should now live under Other favorites / nest dest path (parent 2)
+  const pathA = [...mock._collections.values()].find((c) => c._id === colA);
+  assert.ok(pathA, "collection A exists");
+
+  // Move into exclude → no Raindrop write
+  const excl = await chrome.bookmarks.create({ parentId: "1", title: "ERS-Move-Excl" });
+  await eng.store.setOverride(excl.id, POLICY.EXCLUDE, "Favorites bar/ERS-Move-Excl");
+  const exclBm = await chrome.bookmarks.create({
+    parentId: destFolder.id,
+    title: "ERS exclude move",
+    url: "https://example.com/ers-verify-move-excl",
+  });
+  await eng.queue.enqueue(exclBm.id);
+  await eng.sync.drain();
+  const exclRid = await eng.store.getRaindropId(exclBm.id);
+  const exclColBefore = mock._raindrops.get(Number(exclRid)).collection.$id;
+  bookmarks.get(exclBm.id).parentId = excl.id;
+  const raindropCountBeforeExcl = mock._raindrops.size;
+  await eng.sync.handleBookmarkMoved(exclBm.id, {
+    oldParentId: destFolder.id,
+    parentId: excl.id,
+  });
+  assert.equal(mock._raindrops.size, raindropCountBeforeExcl, "exclude move adds no raindrop");
+  assert.equal(
+    mock._raindrops.get(Number(exclRid)).collection.$id,
+    exclColBefore,
+    "exclude move leaves collection unchanged"
+  );
+  assert.ok(findEdgeByUrl("https://example.com/ers-verify-move-excl"), "edge kept under exclude");
+
+  // Move into offload → update then remove Edge; Raindrop kept; no delete-raindrop
+  const offload = await chrome.bookmarks.create({ parentId: "1", title: "ERS-Move-Offload" });
+  await eng.store.setOverride(offload.id, POLICY.SYNC_DELETE, "Favorites bar/ERS-Move-Offload");
+  const keepBm = await chrome.bookmarks.create({
+    parentId: destFolder.id,
+    title: "ERS offload move",
+    url: "https://example.com/ers-verify-move-offload",
+  });
+  await eng.queue.enqueue(keepBm.id);
+  await eng.sync.drain();
+  const offRid = await eng.store.getRaindropId(keepBm.id);
+  assert.ok(offRid, "paired before offload move");
+  bookmarks.get(keepBm.id).parentId = offload.id;
+  await eng.sync.handleBookmarkMoved(keepBm.id, {
+    oldParentId: destFolder.id,
+    parentId: offload.id,
+  });
+  assert.equal(
+    !!findEdgeByUrl("https://example.com/ers-verify-move-offload"),
+    false,
+    "Edge removed after offload move"
+  );
+  assert.ok(mock._raindrops.get(Number(offRid)), "Raindrop kept after offload move");
+  assert.equal(mock._trash.has(Number(offRid)), false, "not soft-deleted in Raindrop");
+  assert.equal(
+    await eng.store.hasTombstone(String(offRid)),
+    true,
+    "edge-offload tombstone recorded"
+  );
+  const pendingDeletes = (await eng.queue.list()).filter(
+    (j) => eng.queue.jobKind(j) === JOB.DELETE_RAINDROP
+  );
+  assert.equal(pendingDeletes.length, 0, "offload move does not queue Raindrop delete");
+
+  // Stale pair 404 → recreate
+  const staleBm = await chrome.bookmarks.create({
+    parentId: destFolder.id,
+    title: "ERS stale pair",
+    url: "https://example.com/ers-verify-move-stale",
+  });
+  await eng.queue.enqueue(staleBm.id);
+  await eng.sync.drain();
+  const staleRid = await eng.store.getRaindropId(staleBm.id);
+  mock._raindrops.delete(Number(staleRid));
+  const dest2 = await chrome.bookmarks.create({ parentId: "1", title: "ERS-Move-Stale-Dest" });
+  bookmarks.get(staleBm.id).parentId = dest2.id;
+  await eng.sync.handleBookmarkMoved(staleBm.id, {
+    oldParentId: destFolder.id,
+    parentId: dest2.id,
+  });
+  const newRid = await eng.store.getRaindropId(staleBm.id);
+  assert.ok(newRid, "re-paired after 404");
+  assert.notEqual(String(newRid), String(staleRid), "new raindrop after 404 recreate");
+  assert.ok(mock._raindrops.get(Number(newRid)), "recreated raindrop exists");
+
+  console.log("  ✔ move update, reorder no-op, folder fan-out, exclude, offload, 404 recreate");
+}
+
 async function optionalLiveSmoke() {
   if (!USE_LIVE) {
     console.log("\n== Live Raindrop smoke skipped (pass --live with token for API check) ==");
@@ -1327,6 +1528,7 @@ async function main() {
   await scenario66_raindropFolderModes();
   await scenario67_raindropFolderAllowlist();
   await scenario68_rateLimitBudget();
+  await scenario69_bookmarkMoves();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

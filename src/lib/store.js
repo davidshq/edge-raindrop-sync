@@ -9,6 +9,7 @@
 // Pair and suppress mutations share withLock with the queue so concurrent
 // drain / live-capture / reconcile cannot clobber each other's RMW updates.
 // Legacy DEDUP is migrated into PAIRS on first load; pair mutations write PAIRS only.
+// Confirmed deletes/offloads use clearPairWithTombstone (tombstone + forget pair).
 
 import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS, POLICY, SYNC_MODE } from "./constants.js";
 import { withLock } from "./mutex.js";
@@ -195,6 +196,16 @@ export async function addTombstone(raindropId, reason) {
   const stones = await getTombstones();
   stones[String(raindropId)] = { at: Date.now(), reason: reason || "delete" };
   await write(KEY.TOMBSTONES, stones);
+}
+
+/**
+ * Confirmed delete / offload: tombstone then drop the pair so pull cannot
+ * recreate and the bookmarkId mapping cannot go stale.
+ * @returns {Promise<string|null>} prior bookmark id, if any
+ */
+export async function clearPairWithTombstone(raindropId, reason) {
+  await addTombstone(raindropId, reason);
+  return forgetPairByRaindrop(raindropId);
 }
 
 export async function clearTombstone(raindropId) {

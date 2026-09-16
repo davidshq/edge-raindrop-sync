@@ -13,7 +13,8 @@
 //
 // Mid-cycle exits share checkpointOutsidePending / finishReconcileCycle so
 // durable reconcile-state fields cannot drift between the resume and root→outside
-// completion paths.
+// completion paths. List pagination finish uses isListPageDone (shared by root
+// and outside-root loops).
 
 import { JOB, SYNC_MODE, RAINDROP_FOLDER_MODE, MAX_RECONCILE_PAGES_PER_TICK, MAX_ALIVE_CHECKS_PER_TICK, MIN_RECONCILE_INTERVAL_MS } from "./constants.js";
 import {
@@ -51,9 +52,15 @@ import {
   canCreateRaindropOnlyPath,
   pruneAllowlist,
 } from "./allowlist.js";
-import { RaindropClient, AuthError, RateLimitError, RaindropError } from "./raindrop.js";
+import { RaindropClient, AuthError, RateLimitError, isNotFoundError } from "./raindrop.js";
 
 const PER_PAGE = 50;
+
+/** True when this list page is the last (short page or past total count). */
+function isListPageDone(page, perPage, items, count) {
+  const fetched = (page + 1) * perPage;
+  return items.length < perPage || fetched >= count;
+}
 
 /** In-memory reentrancy guard — overlapping heartbeat + manual reconcile must not interleave. */
 let reconciling = false;
@@ -212,9 +219,7 @@ async function reconcileOnce({ force }) {
           });
         }
 
-        const fetched = (page + 1) * PER_PAGE;
-        const finished = items.length < PER_PAGE || fetched >= count;
-        if (finished) {
+        if (isListPageDone(page, PER_PAGE, items, count)) {
           // Root listing done — start outside-root with remaining page budget.
           if (isAllowlistActive(allowlist)) {
             const started = startOutsideCursor(allowlist, index, root._id);
@@ -355,8 +360,7 @@ async function continueOutsideRoot(client, cursor, pullCtx, maxPages) {
       );
     }
 
-    const fetched = (page + 1) * PER_PAGE;
-    if (items.length < PER_PAGE || fetched >= count) {
+    if (isListPageDone(page, PER_PAGE, items, count)) {
       i++;
       page = 0;
     } else {
@@ -515,9 +519,7 @@ async function raindropStillAlive(client, rid) {
     return true;
   } catch (err) {
     if (err instanceof AuthError || err instanceof RateLimitError) throw err;
-    if (err instanceof RaindropError && /\bfailed:\s*404\b/.test(err.message)) {
-      return false;
-    }
+    if (isNotFoundError(err)) return false;
     // 5xx / network / unknown — skip delete this tick.
     return true;
   }

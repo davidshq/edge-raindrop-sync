@@ -4,10 +4,14 @@
 // Edge-owned writes only ever send link/title/collection (plus pleaseParse on
 // create). Never send empty tags/notes — that would clear Raindrop-rich fields.
 //
-// Two error types let the drain react correctly:
+// Error types the drain reacts to:
 //   AuthError      -> token bad/expired: halt deletions, keep jobs queued.
 //   RateLimitError -> HTTP 429 *or* remaining budget exhausted: back off until
 //                     `retryAt`, keep jobs queued. Prefer pausing before 429.
+//   RaindropError  -> other HTTP failures; `status` is set when known.
+//
+// isNotFoundError() is the single “resource already gone” check (prefer
+// status === 404; message fallback for mocks / older throws).
 //
 // X-RateLimit-Reset is normalized once via #parseResetAt (epoch ms or seconds).
 
@@ -33,7 +37,30 @@ export class RateLimitError extends Error {
     this.proactive = proactive;
   }
 }
-export class RaindropError extends Error {}
+export class RaindropError extends Error {
+  /**
+   * @param {string} message
+   * @param {{ status?: number|null }} [opts]
+   */
+  constructor(message, { status = null } = {}) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/**
+ * True when the error means the raindrop/resource is already gone (HTTP 404).
+ * Prefer `err.status`; fall back to a word-boundary 404 in the message for
+ * test doubles that throw plain Errors.
+ * @param {unknown} err
+ */
+export function isNotFoundError(err) {
+  if (!err || typeof err !== "object") return false;
+  const status = /** @type {{ status?: unknown }} */ (err).status;
+  if (typeof status === "number") return status === 404;
+  const message = /** @type {{ message?: unknown }} */ (err).message;
+  return typeof message === "string" && /\b404\b/.test(message);
+}
 
 export class RaindropClient {
   constructor(token) {
@@ -78,7 +105,9 @@ export class RaindropClient {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new RaindropError(`Raindrop ${method} ${path} failed: ${res.status} ${text}`);
+      throw new RaindropError(`Raindrop ${method} ${path} failed: ${res.status} ${text}`, {
+        status: res.status,
+      });
     }
     // DELETE may return an empty body.
     if (res.status === 204) return {};

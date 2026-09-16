@@ -9,6 +9,10 @@
 // contents). handleBookmarkRemoved walks removeInfo.node so every paired URL
 // under the folder still enqueues a Raindrop delete.
 //
+// Folder / bookmark moves: onMoved enqueues upload jobs (same-parent reorder
+// is a no-op). Paired drains update Raindrop collection placement; unpaired
+// create. Moves are never treated as user deletes.
+//
 // Offload (sync-and-delete): after Edge remove, clear the pair and tombstone
 // with reason edge-offload so reconcile cannot pull the item back, without
 // leaving a zombie bookmarkId in the pair map.
@@ -26,7 +30,7 @@ import {
   getBookmarkIdForRaindrop,
   forgetSynced,
   forgetPairByRaindrop,
-  addTombstone,
+  clearPairWithTombstone,
   hasTombstone,
   suppressRemove,
   suppressCreate,
@@ -50,9 +54,10 @@ import {
   resolveEdgeParentForMirror,
   mirrorPathExists,
   ancestorIdsFromFolder,
+  collectUrlDescendantIds,
 } from "./bookmarks.js";
 import { resolvePolicy, isExcluded } from "./policy.js";
-import { RaindropClient, AuthError, RateLimitError } from "./raindrop.js";
+import { RaindropClient, AuthError, RateLimitError, isNotFoundError } from "./raindrop.js";
 import {
   buildCollectionIndex,
   ensureCollectionPath,
@@ -256,6 +261,7 @@ async function processUpload(job, ctx) {
     return;
   }
 
+  // Destination-folder policy (current parent after create or move).
   const { segments, ancestorIds } = await resolveLocation(node);
   const effective = resolvePolicy(ancestorIds, overrides, config.defaultPolicy);
 
@@ -264,18 +270,33 @@ async function processUpload(job, ctx) {
     return;
   }
 
-  if (!(await hasSynced(job.id))) {
-    const index = await getIndex();
-    // Other favorites / Raindrop / … → account-level collection path; else under sync root.
-    const fullSegments = raindropUploadSegments(segments, config.rootName);
-    const collectionId = await ensureCollectionPath(
-      client,
-      index,
-      fullSegments,
-      cache,
-      cacheCollection,
-      uncacheCollection
-    );
+  const index = await getIndex();
+  // Other favorites / Raindrop / … → account-level collection path; else under sync root.
+  const fullSegments = raindropUploadSegments(segments, config.rootName);
+  const collectionId = await ensureCollectionPath(
+    client,
+    index,
+    fullSegments,
+    cache,
+    cacheCollection,
+    uncacheCollection
+  );
+  const pathLabel = fullSegments.join("/");
+
+  let rid = await getRaindropId(job.id);
+  if (rid) {
+    try {
+      await client.updateRaindrop(rid, { collectionId });
+      await appendLog("info", `Moved: ${node.title || node.url} → ${pathLabel}`);
+    } catch (err) {
+      // Stale pair: raindrop gone — clear mapping and fall through to create.
+      if (!isNotFoundError(err)) throw err;
+      await forgetPairByRaindrop(rid);
+      rid = null;
+    }
+  }
+
+  if (!rid && !(await hasSynced(job.id))) {
     const item = await client.createRaindrop({
       link: node.url,
       title: node.title,
@@ -287,15 +308,14 @@ async function processUpload(job, ctx) {
 
   if (effective === POLICY.SYNC_DELETE) {
     const parentId = node.parentId;
-    const rid = await getRaindropId(job.id);
+    const offloadRid = await getRaindropId(job.id);
     // Suppress so onRemoved does not enqueue a Raindrop delete in bidirectional mode.
     await suppressRemove(job.id);
     await removeNode(job.id);
     // Drop the pair (bookmark id is gone) and tombstone so bidirectional pull
     // cannot undo the offload. Raindrop copy is intentionally kept.
-    if (rid) {
-      await addTombstone(rid, "edge-offload");
-      await forgetPairByRaindrop(rid);
+    if (offloadRid) {
+      await clearPairWithTombstone(offloadRid, "edge-offload");
     } else {
       await forgetSynced(job.id);
     }
@@ -399,10 +419,9 @@ async function processDeleteRaindrop(job, ctx) {
     await client.deleteRaindrop(rid);
   } catch (err) {
     // Already gone is fine.
-    if (!/404/.test(err.message || "")) throw err;
+    if (!isNotFoundError(err)) throw err;
   }
-  await addTombstone(rid, "edge-user-delete");
-  await forgetPairByRaindrop(rid);
+  await clearPairWithTombstone(rid, "edge-user-delete");
   await appendLog("info", `Deleted raindrop ${rid} (propagated from Edge).`);
   await queue.remove(job.id);
 }
@@ -439,8 +458,7 @@ async function processDeleteEdge(job, ctx) {
   }
 
   if (rid) {
-    await addTombstone(rid, "raindrop-remote-delete");
-    await forgetPairByRaindrop(rid);
+    await clearPairWithTombstone(rid, "raindrop-remote-delete");
   } else if (bookmarkId) {
     await forgetSynced(bookmarkId);
   }
@@ -548,6 +566,40 @@ export async function handleBookmarkCreated(id, node) {
   if (await consumeCreateSuppression(node.url)) return;
   if (await hasSynced(id)) return;
   await queue.enqueue(id);
+  await drain();
+}
+
+/**
+ * Handle Edge bookmark or folder move (parent change).
+ * Same-parent reorders are ignored. URL nodes enqueue an upload job; folders
+ * fan out to live descendant URL bookmarks (Chromium does not fire per child).
+ * Drain updates Raindrop collection for pairs or creates when unpaired.
+ *
+ * @param {string} id
+ * @param {{ parentId?: string, oldParentId?: string }} [moveInfo] from chrome.bookmarks.onMoved
+ */
+export async function handleBookmarkMoved(id, moveInfo) {
+  const oldParent =
+    moveInfo?.oldParentId != null && moveInfo.oldParentId !== ""
+      ? String(moveInfo.oldParentId)
+      : null;
+  const newParent =
+    moveInfo?.parentId != null && moveInfo.parentId !== ""
+      ? String(moveInfo.parentId)
+      : null;
+  if (oldParent != null && newParent != null && oldParent === newParent) return;
+
+  let node;
+  try {
+    node = await getNode(id);
+  } catch {
+    return;
+  }
+
+  const ids = node.url ? [String(id)] : await collectUrlDescendantIds(id);
+  if (!ids.length) return;
+
+  await queue.enqueueMany(ids);
   await drain();
 }
 

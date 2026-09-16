@@ -14,6 +14,13 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 ## What it does
 
 - **Live capture** — a new bookmark is queued the moment you create it.
+  Dragging a bookmark (or folder) to another Edge parent re-queues it so Raindrop
+  **collection placement** matches the new path; same-folder reorders are ignored.
+  Folder moves fan out to every URL bookmark under that tree. Recent activity
+  logs `Moved: … → …` for placement updates (creates still log `Synced: …`).
+  Moving into an **Exclude** folder skips the Raindrop write (any existing
+  Raindrop copy is left where it was). Moving items inside the Raindrop UI does
+  not yet relocate Edge bookmarks.
 - **Folder mirroring** — your Edge folder tree is recreated as nested Raindrop
   collections under a root collection you name (default `Edge`), preserving both
   Edge roots (`Favorites bar`, `Other favorites`). Path→id cache hits are checked
@@ -167,5 +174,6 @@ scripts/
   does not offer offload as the bidirectional *global* default — that mode
   keeps both sides by default. Stale stored `sync-and-delete` under
   bidirectional is coerced to keep-both on read/save so the engine matches the UI.
-- **Out of scope for now:** re-syncing title/URL/moves via `onChanged`/`onMoved`,
-  OAuth, and publishing to the Edge Add-ons store.
+- **Out of scope for now:** re-syncing title/URL via `onChanged`, relocating
+  Edge bookmarks when you move items inside Raindrop, OAuth, and publishing to
+  the Edge Add-ons store.

@@ -227,6 +227,23 @@ export async function resolveLocation(node) {
   return walkAncestorsFromFolder(node.parentId);
 }
 
+/**
+ * Collect URL bookmark ids under `folderId` (depth-first, not including the
+ * folder itself). Used when Chromium fires a single onMoved for a folder move.
+ */
+export async function collectUrlDescendantIds(folderId) {
+  const out = [];
+  const walk = async (id) => {
+    const children = await getChildren(id);
+    for (const child of children) {
+      if (child.url) out.push(String(child.id));
+      else await walk(child.id);
+    }
+  };
+  await walk(String(folderId));
+  return out;
+}
+
 // Collect every URL-bearing node in the tree (used by backfill), each tagged
 // with its resolved location so the caller can apply policy. `segments` and
 // `ancestorIds` describe the folders descended into, excluding the invisible

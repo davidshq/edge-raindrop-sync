@@ -15,6 +15,7 @@ import {
   reconcileNow,
   handleBookmarkCreated,
   handleBookmarkRemoved,
+  handleBookmarkMoved,
 } from "../lib/sync.js";
 import { startBackfill } from "../lib/backfill.js";
 import * as queue from "../lib/queue.js";
@@ -60,6 +61,12 @@ chrome.bookmarks.onCreated.addListener((id, node) => {
 // Folder deletes: Chromium fires once; sync walks removeInfo.node for child URLs.
 chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
   void handleBookmarkRemoved(id, removeInfo).catch((err) => logSwError("onRemoved", err));
+});
+
+// Parent-folder moves: enqueue upload so paired raindrops update collection
+// placement (same-parent reorder is a no-op). Folder moves fan out to child URLs.
+chrome.bookmarks.onMoved.addListener((id, moveInfo) => {
+  void handleBookmarkMoved(id, moveInfo).catch((err) => logSwError("onMoved", err));
 });
 
 // Heartbeat: drain + bidirectional reconcile.
