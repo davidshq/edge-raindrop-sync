@@ -8,7 +8,11 @@
 // Skips Raindrop file/document uploads. Honors tombstones, exclude, folder mode,
 // and raindropFolderAllowlist (non-empty ⇒ selective Raindrop-only sync).
 // Root-nested and outside-root allowlist listing share maybeEnqueuePullCreate so
-// pull filters cannot drift between the two paths.
+// pull filters cannot drift between the two paths. Pull-update drift gates share
+// computePullUpdatePlan with drain apply (pull-update.js).
+//
+// Delete-confirm and tombstone-prune share rotateConfirmWindow so GET-budget
+// fairness (rotating offset + empty reset) cannot drift between the two loops.
 //
 // After a completed cycle, tombstones for raindrops confirmed absent (GET) are
 // pruned using leftover confirm budget after delete-detection — living offload
@@ -53,10 +57,9 @@ import {
   getTopRoots,
   getNode,
   ancestorIdsForMirrorPath,
-  ancestorIdsFromFolder,
+  folderPolicyAncestorIds,
   mirrorPathExists,
   ensureMirrorFolderPath,
-  resolveExistingMirrorParent,
 } from "./bookmarks.js";
 import {
   buildCollectionIndex,
@@ -73,6 +76,7 @@ import {
   canCreateRaindropOnlyPath,
   pruneAllowlist,
 } from "./allowlist.js";
+import { computePullUpdatePlan } from "./pull-update.js";
 import { RaindropClient, AuthError, RateLimitError, isNotFoundError } from "./raindrop.js";
 
 const PER_PAGE = 50;
@@ -479,10 +483,49 @@ async function finishConfirmGets(client, seenIds, pairs) {
   await finishTombstonePrune(client, seenIds, remaining);
 }
 
-async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
+/**
+ * Walk a rotating window of candidates under a GET budget; persist offset.
+ * Empty candidate list resets the offset so a later non-empty list starts at 0.
+ *
+ * @param {{
+ *   candidates: any[],
+ *   offsetKey: string,
+ *   maxGets: number,
+ *   visit: (candidate: any) => Promise<void>,
+ * }} opts
+ * @returns {Promise<{ checked: number, remaining: number }>}
+ */
+async function rotateConfirmWindow({ candidates, offsetKey, maxGets, visit }) {
+  const state = await getReconcileState();
+  if (!candidates.length) {
+    if ((state[offsetKey] || 0) !== 0) {
+      await setReconcileState({ [offsetKey]: 0 });
+    }
+    return { checked: 0, remaining: maxGets };
+  }
+  if (maxGets <= 0) return { checked: 0, remaining: 0 };
+
+  const offset = (state[offsetKey] || 0) % candidates.length;
+  const toCheck = Math.min(maxGets, candidates.length);
+  for (let n = 0; n < toCheck; n++) {
+    await visit(candidates[(offset + n) % candidates.length]);
+  }
+  await setReconcileState({
+    [offsetKey]: (offset + toCheck) % candidates.length,
+  });
+  return { checked: toCheck, remaining: maxGets - toCheck };
+}
+
+/** In-memory union of durable seenAcc and this cycle's live seenIds (no write). */
+async function seenAccWithLive(seenIds) {
   const state = await getReconcileState();
   const acc = new Set((state.seenAcc || []).map(String));
   for (const id of seenIds) acc.add(String(id));
+  return acc;
+}
+
+async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
+  const acc = await seenAccWithLive(seenIds);
 
   // Build the full candidate list first, then walk a rotating window so pairs
   // past the per-tick budget are not starved across cycles.
@@ -493,51 +536,42 @@ async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
     candidates.push([rid, bookmarkId]);
   }
 
-  if (!candidates.length) {
-    if ((state.aliveConfirmOffset || 0) !== 0) {
-      await setReconcileState({ aliveConfirmOffset: 0 });
-    }
-    return maxGets;
-  }
-
-  if (maxGets <= 0) return 0;
-
-  const offset = (state.aliveConfirmOffset || 0) % candidates.length;
-  const toCheck = Math.min(maxGets, candidates.length);
   let deleteJobs = 0;
-
-  for (let n = 0; n < toCheck; n++) {
-    const [rid, bookmarkId] = candidates[(offset + n) % candidates.length];
-    // Pairs outside the nested root listing (e.g. cleared outside-root allowlist)
-    // never appear in seenIds — confirm with a direct get before deleting Edge.
-    if (await raindropStillAlive(client, rid)) {
+  const { checked, remaining } = await rotateConfirmWindow({
+    candidates,
+    offsetKey: "aliveConfirmOffset",
+    maxGets,
+    visit: async ([rid, bookmarkId]) => {
+      // Pairs outside the nested root listing (e.g. cleared outside-root allowlist)
+      // never appear in seenIds — confirm with a direct get before deleting Edge.
+      if (await raindropStillAlive(client, rid)) {
+        client.throwIfShouldPause();
+        return;
+      }
+      const added = await queue.enqueueJob({
+        id: `de-${rid}`,
+        kind: JOB.DELETE_EDGE,
+        raindropId: rid,
+        bookmarkId,
+      });
+      if (added) deleteJobs++;
       client.throwIfShouldPause();
-      continue;
-    }
-    const added = await queue.enqueueJob({
-      id: `de-${rid}`,
-      kind: JOB.DELETE_EDGE,
-      raindropId: rid,
-      bookmarkId,
-    });
-    if (added) deleteJobs++;
-    client.throwIfShouldPause();
-  }
-
-  const nextOffset = (offset + toCheck) % candidates.length;
-  await setReconcileState({ aliveConfirmOffset: nextOffset });
+    },
+  });
 
   if (deleteJobs > 0) {
     await appendLog("info", `Reconcile queued ${deleteJobs} Edge delete(s) for missing raindrops.`);
   }
-  const deferred = candidates.length - toCheck;
-  if (deferred > 0) {
-    await appendLog(
-      "info",
-      `Reconcile deferred ${deferred} delete-confirm GET(s) to stay under rate limits (will rotate next cycle).`
-    );
+  if (maxGets > 0) {
+    const deferred = candidates.length - checked;
+    if (deferred > 0) {
+      await appendLog(
+        "info",
+        `Reconcile deferred ${deferred} delete-confirm GET(s) to stay under rate limits (will rotate next cycle).`
+      );
+    }
   }
-  return maxGets - toCheck;
+  return remaining;
 }
 
 /**
@@ -547,40 +581,27 @@ async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
  * @returns {Promise<number>} unused GET budget
  */
 async function finishTombstonePrune(client, seenIds, maxGets) {
-  const state = await getReconcileState();
-  const acc = new Set((state.seenAcc || []).map(String));
-  for (const id of seenIds) acc.add(String(id));
+  const acc = await seenAccWithLive(seenIds);
 
   const stones = await getTombstones();
   const candidates = Object.keys(stones).filter((rid) => !acc.has(rid));
-  if (!candidates.length) {
-    if ((state.tombstonePruneOffset || 0) !== 0) {
-      await setReconcileState({ tombstonePruneOffset: 0 });
-    }
-    return maxGets;
-  }
-
-  if (maxGets <= 0) return 0;
-
-  const offset = (state.tombstonePruneOffset || 0) % candidates.length;
-  const toCheck = Math.min(maxGets, candidates.length);
   const absent = [];
 
-  for (let n = 0; n < toCheck; n++) {
-    const rid = candidates[(offset + n) % candidates.length];
-    if (!(await raindropStillAlive(client, rid))) absent.push(rid);
-    client.throwIfShouldPause();
-  }
-
-  await setReconcileState({
-    tombstonePruneOffset: (offset + toCheck) % candidates.length,
+  const { remaining } = await rotateConfirmWindow({
+    candidates,
+    offsetKey: "tombstonePruneOffset",
+    maxGets,
+    visit: async (rid) => {
+      if (!(await raindropStillAlive(client, rid))) absent.push(rid);
+      client.throwIfShouldPause();
+    },
   });
 
   if (absent.length) {
     await pruneTombstones(absent);
     await appendLog("info", `Pruned ${absent.length} stale tombstone(s).`);
   }
-  return maxGets - toCheck;
+  return remaining;
 }
 
 /**
@@ -611,9 +632,7 @@ async function finishFolderRenamePull(index, config, overrides) {
     const wantTitle = col.title || "";
     if ((node.title || "") === wantTitle) continue;
 
-    const parentAncestors =
-      node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
-    const ancestorIds = [String(folderId), ...parentAncestors];
+    const ancestorIds = await folderPolicyAncestorIds(folderId, node.parentId);
     if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) continue;
 
     const added = await queue.enqueueJob({
@@ -745,49 +764,30 @@ async function maybeEnqueuePullUpdate(item, ctx, relative, bookmarkId, colId) {
   }
   if (!node?.url) return 0;
 
-  const wantTitle = item.title || item.link || "";
-  const wantLink = item.link || "";
-  const titleDiff = (node.title || "") !== wantTitle;
-  const urlDiff = (node.url || "") !== wantLink;
-
-  const existingParent = await resolveExistingMirrorParent(
+  const plan = await computePullUpdatePlan({
+    node,
+    wantTitle: item.title || item.link || "",
+    wantLink: item.link || "",
     relative,
-    ctx.config.rootName,
-    ctx.topRoots
-  );
-  let parentDiff =
-    existingParent == null || String(node.parentId) !== String(existingParent);
-
-  // Would need to create Edge folders for the Raindrop placement — same gate as pull-create.
-  if (existingParent == null && parentDiff) {
-    const allowed = canCreateRaindropOnlyPath({
-      allowlist: ctx.allowlist,
-      collectionId: colId,
-      index: ctx.index,
-      rootId: ctx.rootId,
-      edgePathExists: false,
-      folderMode: ctx.folderMode,
-    });
-    if (!allowed) parentDiff = false;
-  }
-
-  if (!titleDiff && !urlDiff && !parentDiff) return 0;
-
-  // Current Edge location under exclude → hands-off (destination already gated).
-  if (node.parentId && node.parentId !== "0") {
-    const currentAncestors = await ancestorIdsFromFolder(node.parentId);
-    if (isExcluded(currentAncestors, ctx.overrides, ctx.config.defaultPolicy)) {
-      return 0;
-    }
-  }
+    rootName: ctx.config.rootName,
+    topRoots: ctx.topRoots,
+    collectionId: colId,
+    allowlist: ctx.allowlist,
+    folderMode: ctx.folderMode,
+    index: ctx.index,
+    rootId: ctx.rootId,
+    overrides: ctx.overrides,
+    defaultPolicy: ctx.config.defaultPolicy,
+  });
+  if (plan.skip) return 0;
 
   const added = await queue.enqueueJob({
     id: `pu-${String(item._id)}`,
     kind: JOB.PULL_UPDATE,
     raindropId: String(item._id),
     bookmarkId: String(bookmarkId),
-    link: wantLink,
-    title: wantTitle,
+    link: plan.wantLink,
+    title: plan.wantTitle,
     relativeSegments: relative,
     collectionId: colId != null ? String(colId) : null,
   });

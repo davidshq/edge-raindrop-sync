@@ -17,6 +17,9 @@
 //
 // Raindrop→Edge field drift: reconcile enqueues pull-update jobs; drain applies
 // title/URL/move with change-suppression so onMoved/onChanged do not echo back.
+// Enqueue and apply share computePullUpdatePlan (pull-update.js) so drift gates
+// cannot diverge. Folder rename/exclude gates share folderPolicyAncestorIds;
+// push and pull rename share refreshCacheAfterRename.
 //
 // Offload (sync-and-delete): after Edge remove, clear the pair and tombstone
 // with reason edge-offload so reconcile cannot pull the item back, without
@@ -65,10 +68,10 @@ import {
   updateBookmark,
   moveBookmark,
   resolveEdgeParentForMirror,
-  resolveExistingMirrorParent,
   getTopRoots,
   mirrorPathExists,
   ancestorIdsFromFolder,
+  folderPolicyAncestorIds,
   collectUrlDescendantIds,
 } from "./bookmarks.js";
 import { resolvePolicy, isExcluded } from "./policy.js";
@@ -83,6 +86,7 @@ import {
   applyCollectionTitleInIndex,
 } from "./collections.js";
 import { canCreateRaindropOnlyPath } from "./allowlist.js";
+import { computePullUpdatePlan } from "./pull-update.js";
 import { reconcile } from "./reconcile.js";
 
 /** Job kinds that run in one-way mode (Edge→Raindrop). */
@@ -399,9 +403,7 @@ async function processRenameCollection(job, ctx) {
     return;
   }
 
-  const parentAncestors =
-    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
-  const ancestorIds = [String(folderId), ...parentAncestors];
+  const ancestorIds = await folderPolicyAncestorIds(folderId, node.parentId);
   if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
     await queue.remove(job.id);
     return;
@@ -422,17 +424,23 @@ async function processRenameCollection(job, ctx) {
     return;
   }
 
-  await rewriteCollectionCacheForRename(collectionId, node.title);
-  // Refresh in-drain path cache from storage so later ensures see the new title.
-  const fresh = await getCollectionCache();
-  for (const key of Object.keys(cache)) delete cache[key];
-  Object.assign(cache, fresh);
-
-  const index = await getIndex();
-  applyCollectionTitleInIndex(index, collectionId, node.title);
+  await refreshCacheAfterRename(cache, collectionId, node.title, getIndex);
 
   await appendLog("info", `Renamed folder: ${node.title}`);
   await queue.remove(job.id);
+}
+
+/**
+ * After a collection rename: rewrite path cache in storage, refresh the in-drain
+ * cache object, and update the live collection index title.
+ */
+async function refreshCacheAfterRename(cache, collectionId, newTitle, getIndex) {
+  await rewriteCollectionCacheForRename(collectionId, newTitle);
+  const fresh = await getCollectionCache();
+  for (const key of Object.keys(cache)) delete cache[key];
+  Object.assign(cache, fresh);
+  const index = await getIndex();
+  applyCollectionTitleInIndex(index, collectionId, newTitle);
 }
 
 async function processPullCreate(job, ctx) {
@@ -544,36 +552,36 @@ async function processPullUpdate(job, ctx) {
   }
 
   const relative = job.relativeSegments || [];
-  if (node.parentId && node.parentId !== "0") {
-    const currentAncestors = await ancestorIdsFromFolder(node.parentId);
-    if (isExcluded(currentAncestors, overrides, config.defaultPolicy)) {
-      await queue.remove(job.id);
-      return;
-    }
-  }
-
-  const wantTitle = job.title || job.link;
-  const wantLink = job.link;
-  const titleDiff = (node.title || "") !== wantTitle;
-  const urlDiff = (node.url || "") !== wantLink;
-
+  const index = await getIndex();
+  const root = findRootCollection(index, config.rootName);
   const topRoots = await getTopRoots();
-  let targetParent = await resolveExistingMirrorParent(relative, config.rootName, topRoots);
-  if (targetParent == null) {
-    const index = await getIndex();
-    const root = findRootCollection(index, config.rootName);
-    const allowed = canCreateRaindropOnlyPath({
-      allowlist: config.raindropFolderAllowlist || {},
-      collectionId: job.collectionId,
-      index,
-      rootId: root?._id ?? null,
-      edgePathExists: false,
-      folderMode: config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
-    });
-    if (allowed) {
-      targetParent = await resolveEdgeParentForMirror(relative, config.rootName, topRoots);
-    }
+  const plan = await computePullUpdatePlan({
+    node,
+    wantTitle: job.title || job.link,
+    wantLink: job.link,
+    relative,
+    rootName: config.rootName,
+    topRoots,
+    collectionId: job.collectionId,
+    allowlist: config.raindropFolderAllowlist || {},
+    folderMode: config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+    index,
+    rootId: root?._id ?? null,
+    overrides,
+    defaultPolicy: config.defaultPolicy,
+  });
+
+  if (plan.skip) {
+    await queue.remove(job.id);
+    return;
   }
+
+  let targetParent = plan.existingParent;
+  if (targetParent == null && plan.shouldCreatePath) {
+    targetParent = await resolveEdgeParentForMirror(relative, config.rootName, topRoots);
+  }
+
+  const { titleDiff, urlDiff, wantTitle, wantLink } = plan;
 
   await suppressChange(bookmarkId);
 
@@ -623,9 +631,7 @@ async function processPullRenameFolder(job, ctx) {
     return;
   }
 
-  const parentAncestors =
-    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
-  const ancestorIds = [folderId, ...parentAncestors];
+  const ancestorIds = await folderPolicyAncestorIds(folderId, node.parentId);
   if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
     await queue.remove(job.id);
     return;
@@ -645,12 +651,7 @@ async function processPullRenameFolder(job, ctx) {
 
   await suppressChange(folderId);
   await updateBookmark(folderId, { title: wantTitle });
-  await rewriteCollectionCacheForRename(collectionId, wantTitle);
-  const fresh = await getCollectionCache();
-  for (const key of Object.keys(cache)) delete cache[key];
-  Object.assign(cache, fresh);
-  const index = await getIndex();
-  applyCollectionTitleInIndex(index, collectionId, wantTitle);
+  await refreshCacheAfterRename(cache, collectionId, wantTitle, getIndex);
 
   await appendLog("info", `Pulled folder rename: ${wantTitle}`);
   await queue.remove(job.id);
@@ -909,9 +910,7 @@ export async function handleBookmarkChanged(id, changeInfo) {
 
   const config = await getConfig();
   const overrides = await getOverrides();
-  const parentAncestors =
-    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
-  const ancestorIds = [String(id), ...parentAncestors];
+  const ancestorIds = await folderPolicyAncestorIds(id, node.parentId);
   if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
     return;
   }

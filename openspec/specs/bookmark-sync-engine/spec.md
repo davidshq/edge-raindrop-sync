@@ -176,6 +176,7 @@ The engine SHALL persist bidirectional pair mappings (`bookmarkId ↔ raindropId
 - **WHEN** bidirectional mode is on and a paired raindrop's title, link, or collection differs from the Edge bookmark
 - **THEN** reconcile enqueues a `pull-update` job
 - **AND** drain applies the Edge title/URL and/or parent folder to match
+- **AND** enqueue and apply use the same pull-update plan (exclude, folder-mode, and allowlist gates)
 - **AND** the resulting `onChanged`/`onMoved` events do not echo an Edge→Raindrop upload
 
 #### Scenario: Pull-update placement create honors folder mode and allowlist

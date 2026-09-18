@@ -12,6 +12,9 @@
 // walkAncestorsFromFolder so upload policy and delete-propagation exclude gates
 // walk the same chain. Upload throws on missing ancestors; delete gates soft-truncate.
 //
+// Folder rename/exclude gates share folderPolicyAncestorIds (folder + parents)
+// so push rename, pull rename, and onChanged cannot disagree on the chain.
+//
 // Note on identity: the on-disk Chromium "guid" is not exposed by the
 // chrome.bookmarks API. We use the node `id`, which is stable across browser
 // restarts and survives renames/moves within the profile — which is exactly the
@@ -235,6 +238,20 @@ export async function walkAncestorsFromFolder(folderId, { soft = false } = {}) {
  */
 export async function ancestorIdsFromFolder(folderId) {
   return (await walkAncestorsFromFolder(folderId, { soft: true })).ancestorIds;
+}
+
+/**
+ * Nearest-first ids for folder policy: the folder itself, then its parents.
+ * Shared by rename/exclude gates (push, pull, onChanged).
+ *
+ * @param {string|number} folderId
+ * @param {string|null|undefined} parentId
+ * @returns {Promise<string[]>}
+ */
+export async function folderPolicyAncestorIds(folderId, parentId) {
+  const parentAncestors =
+    parentId && parentId !== "0" ? await ancestorIdsFromFolder(parentId) : [];
+  return [String(folderId), ...parentAncestors];
 }
 
 // Resolve a bookmark's location into:
