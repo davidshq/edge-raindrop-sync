@@ -41,6 +41,8 @@ export const JOB = {
   PULL_CREATE: "pull-create",
   DELETE_RAINDROP: "delete-raindrop",
   DELETE_EDGE: "delete-edge",
+  /** Edge folder title → Raindrop collection rename (one-way and bidirectional). */
+  RENAME_COLLECTION: "rename-collection",
 };
 
 // chrome.runtime message types (popup / options ↔ service worker).
@@ -63,6 +65,8 @@ export const KEY = {
   SUPPRESS: "suppress", // { removes: { [bookmarkId]: expiresAt }, creates: { [url]: expiresAt } }
   RECONCILE: "reconcile", // { cursorPage, outsideCursor, running, lastRunAt, lastError, seenAcc, aliveConfirmOffset }
   COLLECTION_CACHE: "collectionCache", // { [collectionPath]: collectionId }
+  /** Edge folder id → Raindrop collection id (for in-place folder renames). */
+  FOLDER_COLLECTIONS: "folderCollections", // { [folderId]: collectionId }
   STATUS: "status", // { pending, lastError, deletionsHalted, lastActivityAt, rateLimitedUntil }
   LOG: "log", // [ { at, level, message } ] recent ring buffer (LOG_LIMIT)
 };

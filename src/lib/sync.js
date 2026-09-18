@@ -9,9 +9,11 @@
 // contents). handleBookmarkRemoved walks removeInfo.node so every paired URL
 // under the folder still enqueues a Raindrop delete.
 //
-// Folder / bookmark moves: onMoved enqueues upload jobs (same-parent reorder
-// is a no-op). Paired drains update Raindrop collection placement; unpaired
-// create. Moves are never treated as user deletes.
+// Live Edge→Raindrop updates (never treated as user deletes):
+//   onMoved  — parent change; folders fan out to descendant URLs
+//   onChanged — bookmark title/URL, or folder title (in-place collection rename)
+// Paired upload drains update link/title/collection; folder renames use
+// rename-collection jobs + folderId→collectionId map.
 //
 // Offload (sync-and-delete): after Edge remove, clear the pair and tombstone
 // with reason edge-offload so reconcile cannot pull the item back, without
@@ -24,6 +26,10 @@ import {
   getCollectionCache,
   cacheCollection,
   uncacheCollection,
+  rewriteCollectionCacheForRename,
+  recordFolderCollection,
+  getFolderCollectionId,
+  clearFolderCollection,
   hasSynced,
   recordSynced,
   getRaindropId,
@@ -64,9 +70,14 @@ import {
   findRootCollection,
   collectionIdFromRelative,
   raindropUploadSegments,
+  recordFolderCollectionsAlongPath,
+  applyCollectionTitleInIndex,
 } from "./collections.js";
 import { canCreateRaindropOnlyPath } from "./allowlist.js";
 import { reconcile } from "./reconcile.js";
+
+/** Job kinds that run in one-way mode (Edge→Raindrop). */
+const ONE_WAY_KINDS = new Set([JOB.UPLOAD, JOB.RENAME_COLLECTION]);
 
 let draining = false; // best-effort in-memory reentrancy guard (idempotent anyway)
 
@@ -208,6 +219,15 @@ async function drainLoop() {
       if (await handleClientError(err, { job })) return;
       await queue.defer(job.id, Date.now());
       await appendLog("error", `Sync failed (will retry): ${err.message}`);
+      // Rename must stay ahead of uploads: if it defers, stop this pass and
+      // push other due work out to the same backoff window so a later tick
+      // cannot path-ensure the new Edge title before the rename retries.
+      if (queue.jobKind(job) === JOB.RENAME_COLLECTION) {
+        const deferred = (await queue.list()).find((j) => j.id === job.id);
+        const until = deferred?.nextAttemptAt ?? Date.now();
+        await queue.deferAllDueUntil(until);
+        break;
+      }
     }
   }
 
@@ -223,8 +243,9 @@ async function processJob(job, ctx) {
   const kind = queue.jobKind(job);
   const bidirectional = ctx.config.syncMode === SYNC_MODE.BIDIRECTIONAL;
 
-  // Bidirectional-only jobs are no-ops in one-way mode.
-  if (!bidirectional && kind !== JOB.UPLOAD) {
+  // Bidirectional-only jobs are no-ops in one-way mode; upload + folder rename
+  // still run (Edge→Raindrop).
+  if (!bidirectional && !ONE_WAY_KINDS.has(kind)) {
     await queue.remove(job.id);
     return;
   }
@@ -238,6 +259,9 @@ async function processJob(job, ctx) {
       break;
     case JOB.DELETE_EDGE:
       await processDeleteEdge(job, ctx);
+      break;
+    case JOB.RENAME_COLLECTION:
+      await processRenameCollection(job, ctx);
       break;
     case JOB.UPLOAD:
     default:
@@ -261,7 +285,7 @@ async function processUpload(job, ctx) {
     return;
   }
 
-  // Destination-folder policy (current parent after create or move).
+  // Destination-folder policy (current parent after create, move, or change).
   const { segments, ancestorIds } = await resolveLocation(node);
   const effective = resolvePolicy(ancestorIds, overrides, config.defaultPolicy);
 
@@ -281,13 +305,28 @@ async function processUpload(job, ctx) {
     cacheCollection,
     uncacheCollection
   );
+  await recordFolderCollectionsAlongPath(
+    segments,
+    ancestorIds,
+    fullSegments,
+    cache,
+    recordFolderCollection
+  );
   const pathLabel = fullSegments.join("/");
 
   let rid = await getRaindropId(job.id);
   if (rid) {
     try {
-      await client.updateRaindrop(rid, { collectionId });
-      await appendLog("info", `Moved: ${node.title || node.url} → ${pathLabel}`);
+      await client.updateRaindrop(rid, {
+        link: node.url,
+        title: node.title,
+        collectionId,
+      });
+      if (job.reason === "move") {
+        await appendLog("info", `Moved: ${node.title || node.url} → ${pathLabel}`);
+      } else {
+        await appendLog("info", `Updated: ${node.title || node.url}`);
+      }
     } catch (err) {
       // Stale pair: raindrop gone — clear mapping and fall through to create.
       if (!isNotFoundError(err)) throw err;
@@ -322,6 +361,62 @@ async function processUpload(job, ctx) {
     if (config.pruneEmpty) await pruneIfEmpty(parentId, config, overrides);
   }
 
+  await queue.remove(job.id);
+}
+
+/**
+ * In-place Raindrop collection rename for a mapped Edge folder.
+ */
+async function processRenameCollection(job, ctx) {
+  const { client, config, overrides, cache, getIndex } = ctx;
+  const folderId = job.folderId != null ? String(job.folderId) : String(job.id).replace(/^rc-/, "");
+
+  let node;
+  try {
+    node = await getNode(folderId);
+  } catch {
+    await clearFolderCollection(folderId);
+    await queue.remove(job.id);
+    return;
+  }
+  if (node.url) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  const parentAncestors =
+    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
+  const ancestorIds = [String(folderId), ...parentAncestors];
+  if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  const collectionId = await getFolderCollectionId(folderId);
+  if (collectionId == null) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  try {
+    await client.updateCollection(collectionId, { title: node.title });
+  } catch (err) {
+    if (!isNotFoundError(err)) throw err;
+    await clearFolderCollection(folderId);
+    await queue.remove(job.id);
+    return;
+  }
+
+  await rewriteCollectionCacheForRename(collectionId, node.title);
+  // Refresh in-drain path cache from storage so later ensures see the new title.
+  const fresh = await getCollectionCache();
+  for (const key of Object.keys(cache)) delete cache[key];
+  Object.assign(cache, fresh);
+
+  const index = await getIndex();
+  applyCollectionTitleInIndex(index, collectionId, node.title);
+
+  await appendLog("info", `Renamed folder: ${node.title}`);
   await queue.remove(job.id);
 }
 
@@ -599,7 +694,57 @@ export async function handleBookmarkMoved(id, moveInfo) {
   const ids = node.url ? [String(id)] : await collectUrlDescendantIds(id);
   if (!ids.length) return;
 
-  await queue.enqueueMany(ids);
+  await queue.enqueueMany(ids, { reason: "move" });
+  await drain();
+}
+
+/**
+ * Handle Edge bookmark title/URL edits and folder renames (`onChanged`).
+ * URL nodes enqueue an upload with reason `change`. Folders with a persisted
+ * folder→collection mapping enqueue `rename-collection` (exclude / unmapped = no-op).
+ *
+ * @param {string} id
+ * @param {{ title?: string, url?: string }} [changeInfo] from chrome.bookmarks.onChanged
+ */
+export async function handleBookmarkChanged(id, changeInfo) {
+  if (
+    !changeInfo ||
+    (changeInfo.title === undefined && changeInfo.url === undefined)
+  ) {
+    return;
+  }
+
+  let node;
+  try {
+    node = await getNode(id);
+  } catch {
+    return;
+  }
+
+  if (node.url) {
+    await queue.enqueue(String(id), { reason: "change" });
+    await drain();
+    return;
+  }
+
+  // Folder title change → in-place Raindrop collection rename when mapped.
+  const collectionId = await getFolderCollectionId(id);
+  if (collectionId == null) return;
+
+  const config = await getConfig();
+  const overrides = await getOverrides();
+  const parentAncestors =
+    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
+  const ancestorIds = [String(id), ...parentAncestors];
+  if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+    return;
+  }
+
+  await queue.enqueueJob({
+    id: `rc-${id}`,
+    kind: JOB.RENAME_COLLECTION,
+    folderId: String(id),
+  });
   await drain();
 }
 

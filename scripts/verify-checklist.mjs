@@ -245,6 +245,12 @@ function makeMockRaindrop() {
       // intentionally never clear tags/note unless provided — engine won't send them
       return item;
     },
+    async updateCollection(id, { title } = {}) {
+      const item = collections.get(Number(id));
+      if (!item) throw new Error(`Raindrop PUT /collection/${id} failed: 404`);
+      if (title != null) item.title = title;
+      return item;
+    },
     async deleteRaindrop(id) {
       const item = raindrops.get(Number(id));
       if (item) {
@@ -1366,6 +1372,8 @@ async function scenario69_bookmarkMoves() {
   await eng.sync.drain();
   const ridA = await eng.store.getRaindropId(bmA.id);
   const ridB = await eng.store.getRaindropId(bmB.id);
+  const colABefore = mock._raindrops.get(Number(ridA)).collection.$id;
+  const colBBefore = mock._raindrops.get(Number(ridB)).collection.$id;
   const nestDest = await chrome.bookmarks.create({
     parentId: "2",
     title: "ERS-Move-Nest-Dest",
@@ -1377,11 +1385,8 @@ async function scenario69_bookmarkMoves() {
   });
   const colA = mock._raindrops.get(Number(ridA)).collection.$id;
   const colB = mock._raindrops.get(Number(ridB)).collection.$id;
-  assert.ok(colA, "nested A still has collection");
-  assert.ok(colB, "nested B still has collection");
-  // Both should now live under Other favorites / nest dest path (parent 2)
-  const pathA = [...mock._collections.values()].find((c) => c._id === colA);
-  assert.ok(pathA, "collection A exists");
+  assert.notEqual(colA, colABefore, "folder move updates nested A collection");
+  assert.notEqual(colB, colBBefore, "folder move updates nested B collection");
 
   // Move into exclude → no Raindrop write
   const excl = await chrome.bookmarks.create({ parentId: "1", title: "ERS-Move-Excl" });
@@ -1467,6 +1472,340 @@ async function scenario69_bookmarkMoves() {
   console.log("  ✔ move update, reorder no-op, folder fan-out, exclude, offload, 404 recreate");
 }
 
+async function scenario70_onChangedAndFolderRename() {
+  console.log("\n== 7.0 onChanged title/URL + folder rename ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, JOB } = eng.constants;
+  await resetAll(eng.store);
+
+  const mock = makeMockRaindrop();
+  patchClient(eng.raindropMod, mock);
+  const rootName = "ERS-Verify-Change";
+
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+  });
+
+  const folder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Change-Folder",
+  });
+  const bm = await chrome.bookmarks.create({
+    parentId: folder.id,
+    title: "ERS change me",
+    url: "https://example.com/ers-verify-change",
+  });
+
+  await eng.queue.enqueue(bm.id);
+  await eng.sync.drain();
+  const rid = await eng.store.getRaindropId(bm.id);
+  assert.ok(rid, "paired after upload");
+  const item = mock._raindrops.get(Number(rid));
+  item.tags = ["keep-tag"];
+  item.note = "keep-note";
+  const folderColId = await eng.store.getFolderCollectionId(folder.id);
+  assert.ok(folderColId != null, "folder→collection mapped on upload");
+
+  // Title change
+  bookmarks.get(bm.id).title = "ERS changed title";
+  await eng.sync.handleBookmarkChanged(bm.id, { title: "ERS changed title" });
+  const afterTitle = mock._raindrops.get(Number(rid));
+  assert.equal(afterTitle.title, "ERS changed title", "title updated");
+  assert.deepEqual(afterTitle.tags, ["keep-tag"], "tags intact after title change");
+  assert.equal(afterTitle.note, "keep-note", "note intact after title change");
+  const logAfterTitle = await eng.store.getLog();
+  assert.ok(
+    logAfterTitle.some((e) => typeof e.message === "string" && e.message.startsWith("Updated:")),
+    "activity logs Updated:"
+  );
+
+  // URL change
+  bookmarks.get(bm.id).url = "https://example.com/ers-verify-change-v2";
+  await eng.sync.handleBookmarkChanged(bm.id, { url: "https://example.com/ers-verify-change-v2" });
+  assert.equal(
+    mock._raindrops.get(Number(rid)).link,
+    "https://example.com/ers-verify-change-v2",
+    "link updated"
+  );
+
+  // Exclude skips title update
+  const excl = await chrome.bookmarks.create({ parentId: "1", title: "ERS-Change-Excl" });
+  await eng.store.setOverride(excl.id, POLICY.EXCLUDE, "Favorites bar/ERS-Change-Excl");
+  const exclBm = await chrome.bookmarks.create({
+    parentId: excl.id,
+    title: "ERS excl change",
+    url: "https://example.com/ers-verify-change-excl",
+  });
+  // Manually pair as if previously synced elsewhere, then change under exclude
+  await eng.store.recordSynced(exclBm.id, 999001);
+  mock._raindrops.set(999001, {
+    _id: 999001,
+    link: exclBm.url,
+    title: exclBm.title,
+    collection: { $id: 1 },
+    tags: [],
+    note: "",
+  });
+  bookmarks.get(exclBm.id).title = "should not sync";
+  await eng.sync.handleBookmarkChanged(exclBm.id, { title: "should not sync" });
+  assert.equal(
+    mock._raindrops.get(999001).title,
+    "ERS excl change",
+    "exclude title change does not update Raindrop"
+  );
+
+  // Mapped folder rename — same collection id, new title, path cache rewritten
+  const oldCol = mock._collections.get(Number(folderColId));
+  assert.equal(oldCol.title, "ERS-Change-Folder");
+  const cacheBefore = await eng.store.getCollectionCache();
+  const oldPathKeys = Object.keys(cacheBefore).filter((p) => p.includes("ERS-Change-Folder"));
+  assert.ok(oldPathKeys.length > 0, "path cache has old folder title");
+
+  bookmarks.get(folder.id).title = "ERS-Renamed-Folder";
+  await eng.sync.handleBookmarkChanged(folder.id, { title: "ERS-Renamed-Folder" });
+  const renamed = mock._collections.get(Number(folderColId));
+  assert.ok(renamed, "collection still exists");
+  assert.equal(renamed.title, "ERS-Renamed-Folder", "collection title renamed");
+  assert.equal(
+    await eng.store.getFolderCollectionId(folder.id),
+    folderColId,
+    "folder map keeps same collection id"
+  );
+  const cacheAfter = await eng.store.getCollectionCache();
+  assert.equal(
+    Object.keys(cacheAfter).some((p) => p.includes("ERS-Change-Folder")),
+    false,
+    "path cache dropped old title prefix"
+  );
+  assert.ok(
+    Object.keys(cacheAfter).some((p) => p.includes("ERS-Renamed-Folder")),
+    "path cache has new title"
+  );
+  const logRename = await eng.store.getLog();
+  assert.ok(
+    logRename.some(
+      (e) => typeof e.message === "string" && e.message.startsWith("Renamed folder:")
+    ),
+    "activity logs Renamed folder:"
+  );
+
+  // Unmapped folder rename — no-op
+  const orphan = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Never-Synced-Folder",
+  });
+  const colCount = mock._collections.size;
+  bookmarks.get(orphan.id).title = "ERS-Still-Unmapped";
+  await eng.sync.handleBookmarkChanged(orphan.id, { title: "ERS-Still-Unmapped" });
+  assert.equal(mock._collections.size, colCount, "unmapped rename creates no collection");
+  assert.equal(
+    (await eng.queue.list()).some((j) => eng.queue.jobKind(j) === JOB.RENAME_COLLECTION),
+    false,
+    "unmapped rename leaves no rename job"
+  );
+
+  // Exclude folder rename skipped
+  const exclFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Excl-Folder-Rename",
+  });
+  await eng.store.setOverride(exclFolder.id, POLICY.EXCLUDE, "Favorites bar/ERS-Excl-Folder-Rename");
+  await eng.store.recordFolderCollection(exclFolder.id, folderColId);
+  bookmarks.get(exclFolder.id).title = "ERS-Excl-Renamed";
+  await eng.sync.handleBookmarkChanged(exclFolder.id, { title: "ERS-Excl-Renamed" });
+  assert.equal(
+    mock._collections.get(Number(folderColId)).title,
+    "ERS-Renamed-Folder",
+    "exclude folder rename does not change Raindrop title"
+  );
+
+  // Race: upload already queued, then folder rename — rename must win (same id, no orphan).
+  const raceFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Race-Old",
+  });
+  const raceBm = await chrome.bookmarks.create({
+    parentId: raceFolder.id,
+    title: "ERS race bm",
+    url: "https://example.com/ers-verify-rename-race",
+  });
+  await eng.queue.enqueue(raceBm.id);
+  await eng.sync.drain();
+  const raceRid = await eng.store.getRaindropId(raceBm.id);
+  const raceColId = await eng.store.getFolderCollectionId(raceFolder.id);
+  assert.ok(raceColId != null, "race folder mapped");
+  const parentOfRace = mock._collections.get(Number(raceColId))?.parent?.$id;
+  const colsBeforeRace = [...mock._collections.values()].filter(
+    (c) =>
+      c.parent?.$id === parentOfRace ||
+      (c.parent?.$id == null && parentOfRace == null) ||
+      String(c.parent?.$id) === String(parentOfRace)
+  ).length;
+
+  bookmarks.get(raceFolder.id).title = "ERS-Race-New";
+  await eng.queue.clear();
+  // Upload first in storage order; due() must still drain rename first.
+  await eng.queue.enqueue(raceBm.id, { reason: "change" });
+  await eng.queue.enqueueJob({
+    id: `rc-${raceFolder.id}`,
+    kind: JOB.RENAME_COLLECTION,
+    folderId: String(raceFolder.id),
+  });
+  const dueOrdered = await eng.queue.due(Date.now());
+  assert.equal(
+    eng.queue.jobKind(dueOrdered[0]),
+    JOB.RENAME_COLLECTION,
+    "due() prioritizes rename-collection ahead of upload"
+  );
+  await eng.sync.drain();
+
+  assert.equal(
+    mock._collections.get(Number(raceColId))?.title,
+    "ERS-Race-New",
+    "mapped collection retitled in place"
+  );
+  assert.equal(
+    await eng.store.getFolderCollectionId(raceFolder.id),
+    raceColId,
+    "folder map still points at same collection id"
+  );
+  assert.equal(
+    mock._raindrops.get(Number(raceRid))?.collection?.$id,
+    Number(raceColId) || raceColId,
+    "raindrop stayed on renamed collection"
+  );
+  const siblingNew = [...mock._collections.values()].filter(
+    (c) =>
+      (c.title || "") === "ERS-Race-New" &&
+      (c.parent?.$id === parentOfRace || String(c.parent?.$id) === String(parentOfRace))
+  );
+  assert.equal(siblingNew.length, 1, "no duplicate collection for new title");
+  assert.equal(
+    [...mock._collections.values()].some(
+      (c) =>
+        (c.title || "") === "ERS-Race-Old" &&
+        (c.parent?.$id === parentOfRace || String(c.parent?.$id) === String(parentOfRace))
+    ),
+    false,
+    "old title not left as sibling orphan"
+  );
+  assert.equal(
+    [...mock._collections.values()].filter(
+      (c) =>
+        c.parent?.$id === parentOfRace ||
+        (c.parent?.$id == null && parentOfRace == null) ||
+        String(c.parent?.$id) === String(parentOfRace)
+    ).length,
+    colsBeforeRace,
+    "no extra collection under same parent after rename+upload race"
+  );
+
+  // Rename defer aborts the pass: upload must not create a duplicate while rename retries.
+  const deferFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Defer-Old",
+  });
+  const deferBm = await chrome.bookmarks.create({
+    parentId: deferFolder.id,
+    title: "ERS defer bm",
+    url: "https://example.com/ers-verify-rename-defer",
+  });
+  await eng.queue.enqueue(deferBm.id);
+  await eng.sync.drain();
+  const deferColId = await eng.store.getFolderCollectionId(deferFolder.id);
+  assert.ok(deferColId != null, "defer folder mapped");
+  const deferParent = mock._collections.get(Number(deferColId))?.parent?.$id;
+  const colsBeforeDefer = [...mock._collections.values()].filter(
+    (c) =>
+      c.parent?.$id === deferParent ||
+      (c.parent?.$id == null && deferParent == null) ||
+      String(c.parent?.$id) === String(deferParent)
+  ).length;
+
+  bookmarks.get(deferFolder.id).title = "ERS-Defer-New";
+  await eng.queue.clear();
+  await eng.queue.enqueue(deferBm.id, { reason: "change" });
+  await eng.queue.enqueueJob({
+    id: `rc-${deferFolder.id}`,
+    kind: JOB.RENAME_COLLECTION,
+    folderId: String(deferFolder.id),
+  });
+
+  const realUpdateCollection = mock.updateCollection.bind(mock);
+  let renameFailuresLeft = 1;
+  mock.updateCollection = async (id, fields) => {
+    if (renameFailuresLeft-- > 0) throw new Error("temporary rename failure");
+    return realUpdateCollection(id, fields);
+  };
+
+  await eng.sync.drain();
+  assert.equal(
+    mock._collections.get(Number(deferColId))?.title,
+    "ERS-Defer-Old",
+    "collection title unchanged after failed rename"
+  );
+  assert.equal(
+    [...mock._collections.values()].some((c) => (c.title || "") === "ERS-Defer-New"),
+    false,
+    "upload did not create new-titled collection after rename defer"
+  );
+  assert.equal(
+    [...mock._collections.values()].filter(
+      (c) =>
+        c.parent?.$id === deferParent ||
+        (c.parent?.$id == null && deferParent == null) ||
+        String(c.parent?.$id) === String(deferParent)
+    ).length,
+    colsBeforeDefer,
+    "no extra sibling after rename defer abort"
+  );
+  const pendingAfterDefer = await eng.queue.list();
+  const renamePending = pendingAfterDefer.find(
+    (j) => eng.queue.jobKind(j) === JOB.RENAME_COLLECTION
+  );
+  const uploadPending = pendingAfterDefer.find(
+    (j) => eng.queue.jobKind(j) === JOB.UPLOAD && j.id === deferBm.id
+  );
+  assert.ok(renamePending, "rename job still queued after defer");
+  assert.ok(uploadPending, "upload left for a later pass");
+  assert.ok(
+    (uploadPending.nextAttemptAt ?? 0) >= (renamePending.nextAttemptAt ?? 0),
+    "upload deferred at least as late as rename backoff"
+  );
+  assert.equal(
+    (await eng.queue.due(Date.now())).length,
+    0,
+    "nothing due until rename backoff elapses"
+  );
+
+  // Next drain: force both due; rename succeeds, then upload; still one collection id.
+  await eng.queue.deferUntil(renamePending.id, 0);
+  await eng.queue.deferUntil(uploadPending.id, 0);
+  await eng.sync.drain();
+  assert.equal(
+    mock._collections.get(Number(deferColId))?.title,
+    "ERS-Defer-New",
+    "rename succeeds on retry"
+  );
+  assert.equal(
+    await eng.store.getFolderCollectionId(deferFolder.id),
+    deferColId,
+    "folder map unchanged after deferred rename"
+  );
+  assert.equal(
+    [...mock._collections.values()].filter((c) => (c.title || "") === "ERS-Defer-New").length,
+    1,
+    "single new-titled collection after retry"
+  );
+
+  console.log(
+    "  ✔ title/URL update, exclude skip, folder rename, unmapped/exclude no-op, rename-before-upload, rename-defer abort"
+  );
+}
+
 async function optionalLiveSmoke() {
   if (!USE_LIVE) {
     console.log("\n== Live Raindrop smoke skipped (pass --live with token for API check) ==");
@@ -1529,6 +1868,7 @@ async function main() {
   await scenario67_raindropFolderAllowlist();
   await scenario68_rateLimitBudget();
   await scenario69_bookmarkMoves();
+  await scenario70_onChangedAndFolderRename();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

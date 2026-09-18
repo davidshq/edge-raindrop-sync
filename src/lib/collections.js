@@ -261,3 +261,72 @@ export async function ensureCollectionPath(client, index, fullSegments, cache, p
 
   return collectionId;
 }
+
+/**
+ * Persist Edge folder id → Raindrop collection id for each mirrored segment
+ * after ensureCollectionPath has warmed `cache`. Enables in-place folder renames
+ * when onChanged lacks the old title.
+ *
+ * @param {string[]} edgeSegments root-first Edge folder titles (resolveLocation)
+ * @param {string[]} ancestorIds nearest-first Edge folder ids
+ * @param {string[]} fullSegments Raindrop path from raindropUploadSegments
+ * @param {Record<string, string|number>} cache path → collectionId
+ * @param {(folderId: string, collectionId: string|number) => Promise<void>} record
+ */
+export async function recordFolderCollectionsAlongPath(
+  edgeSegments,
+  ancestorIds,
+  fullSegments,
+  cache,
+  record
+) {
+  if (typeof record !== "function") return;
+  const segs = edgeSegments || [];
+  const full = fullSegments || [];
+  const edgeIdsRootFirst = [...(ancestorIds || [])].reverse();
+
+  // Under sync root: full = [rootName, ...segs] — zip edge folders to full.slice(1).
+  if (full.length === segs.length + 1 && segs.length === edgeIdsRootFirst.length) {
+    for (let i = 0; i < segs.length; i++) {
+      const path = full.slice(0, i + 2).join("/");
+      const colId = cache[path];
+      const folderId = edgeIdsRootFirst[i];
+      if (colId != null && folderId != null) await record(String(folderId), colId);
+    }
+    return;
+  }
+
+  // Outside-root landing: Other favorites / Raindrop / rest → full = rest.
+  if (
+    segs.length >= 2 &&
+    /other/i.test(segs[0] || "") &&
+    (segs[1] || "").toLowerCase() === OUTSIDE_ROOT_MIRROR_FOLDER.toLowerCase()
+  ) {
+    const restFolders = edgeIdsRootFirst.slice(2);
+    for (let i = 0; i < full.length && i < restFolders.length; i++) {
+      const path = full.slice(0, i + 1).join("/");
+      const colId = cache[path];
+      if (colId != null) await record(String(restFolders[i]), colId);
+    }
+  }
+}
+
+/**
+ * Keep an in-memory collection index consistent after PUT /collection title.
+ * @param {{ byParent?: Map, byId?: Map }|null|undefined} index
+ * @param {string|number} collectionId
+ * @param {string} newTitle
+ */
+export function applyCollectionTitleInIndex(index, collectionId, newTitle) {
+  const col = getById(index, collectionId);
+  if (!col) return;
+  const parentId = col.parent && col.parent.$id != null ? col.parent.$id : ROOT;
+  const siblings = getByParent(index, parentId);
+  if (siblings) {
+    siblings.delete((col.title || "").toLowerCase());
+    col.title = newTitle;
+    siblings.set((newTitle || "").toLowerCase(), col);
+  } else {
+    col.title = newTitle;
+  }
+}

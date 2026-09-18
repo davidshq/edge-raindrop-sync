@@ -186,6 +186,19 @@ export class RaindropClient {
     return data.item;
   }
 
+  /**
+   * Field-selective collection update (e.g. Edge folder rename → title only).
+   * @param {number|string} id
+   * @param {{ title?: string }} [fields]
+   */
+  async updateCollection(id, { title } = {}) {
+    const body = {};
+    if (title != null) body.title = title;
+    if (Object.keys(body).length === 0) return null;
+    const data = await this.request("PUT", `/collection/${id}`, body);
+    return data.item;
+  }
+
   // Create a raindrop (bookmark) inside a collection. `pleaseParse` asks
   // Raindrop to enrich metadata (cover, excerpt) from the link. Rich fields
   // are intentionally omitted so we never clear tags/notes/highlights.

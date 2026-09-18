@@ -16,6 +16,7 @@ import {
   handleBookmarkCreated,
   handleBookmarkRemoved,
   handleBookmarkMoved,
+  handleBookmarkChanged,
 } from "../lib/sync.js";
 import { startBackfill } from "../lib/backfill.js";
 import * as queue from "../lib/queue.js";
@@ -67,6 +68,12 @@ chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
 // placement (same-parent reorder is a no-op). Folder moves fan out to child URLs.
 chrome.bookmarks.onMoved.addListener((id, moveInfo) => {
   void handleBookmarkMoved(id, moveInfo).catch((err) => logSwError("onMoved", err));
+});
+
+// Title/URL edits and folder renames: paired raindrops get Edge-owned field
+// updates; mapped folders rename the Raindrop collection in place.
+chrome.bookmarks.onChanged.addListener((id, changeInfo) => {
+  void handleBookmarkChanged(id, changeInfo).catch((err) => logSwError("onChanged", err));
 });
 
 // Heartbeat: drain + bidirectional reconcile.

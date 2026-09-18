@@ -23,6 +23,15 @@ export function jobKind(job) {
   return job.kind || JOB.UPLOAD;
 }
 
+/**
+ * Drain ordering: lower runs first. Folder renames before uploads so a pending
+ * child upload does not ensureCollectionPath on the new title and orphan the
+ * mapped collection (create-new instead of in-place rename).
+ */
+export function drainJobPriority(kind) {
+  return kind === JOB.RENAME_COLLECTION ? 0 : 1;
+}
+
 export async function list() {
   return readQueue();
 }
@@ -31,15 +40,26 @@ export async function size() {
   return (await readQueue()).length;
 }
 
-/** Enqueue an upload job for a bookmark id (backward-compatible). */
-export async function enqueue(id) {
-  return enqueueJob({ id, kind: JOB.UPLOAD });
+/**
+ * Enqueue an upload job for a bookmark id (backward-compatible).
+ * @param {string} id bookmark id
+ * @param {{ reason?: "move"|"change" }} [opts] activity hint for paired drain
+ */
+export async function enqueue(id, { reason } = {}) {
+  return enqueueJob({ id, kind: JOB.UPLOAD, ...(reason ? { reason } : {}) });
 }
 
 export async function enqueueJob(job) {
   return withLock(async () => {
     const jobs = await readQueue();
-    if (jobs.some((j) => j.id === job.id)) return false;
+    const existing = jobs.find((j) => j.id === job.id);
+    if (existing) {
+      // Promote activity hint when a move coalesces with an earlier change.
+      if (job.reason === "move") existing.reason = "move";
+      else if (job.reason && !existing.reason) existing.reason = job.reason;
+      await writeQueue(jobs);
+      return false;
+    }
     jobs.push({
       attempts: 0,
       nextAttemptAt: 0,
@@ -51,15 +71,31 @@ export async function enqueueJob(job) {
   });
 }
 
-export async function enqueueMany(ids) {
+/**
+ * @param {string[]} ids
+ * @param {{ reason?: "move"|"change" }} [opts]
+ */
+export async function enqueueMany(ids, { reason } = {}) {
   return withLock(async () => {
     const jobs = await readQueue();
-    const known = new Set(jobs.map((j) => j.id));
+    const byId = new Map(jobs.map((j) => [j.id, j]));
     let added = 0;
     for (const id of ids) {
-      if (known.has(id)) continue;
-      jobs.push({ id, kind: JOB.UPLOAD, attempts: 0, nextAttemptAt: 0 });
-      known.add(id);
+      const existing = byId.get(id);
+      if (existing) {
+        if (reason === "move") existing.reason = "move";
+        else if (reason && !existing.reason) existing.reason = reason;
+        continue;
+      }
+      const job = {
+        id,
+        kind: JOB.UPLOAD,
+        attempts: 0,
+        nextAttemptAt: 0,
+        ...(reason ? { reason } : {}),
+      };
+      jobs.push(job);
+      byId.set(id, job);
       added++;
     }
     await writeQueue(jobs);
@@ -74,10 +110,13 @@ export async function remove(id) {
   });
 }
 
-// Jobs whose backoff window has elapsed, in queue order.
+// Jobs whose backoff window has elapsed. Folder renames are sorted ahead of
+// other kinds so in-place collection rename wins over title-based path ensure.
 export async function due(now) {
   const jobs = await readQueue();
-  return jobs.filter((j) => (j.nextAttemptAt ?? 0) <= now);
+  return jobs
+    .filter((j) => (j.nextAttemptAt ?? 0) <= now)
+    .sort((a, b) => drainJobPriority(jobKind(a)) - drainJobPriority(jobKind(b)));
 }
 
 // Defer a job with exponential backoff (used for transient/unknown errors).

@@ -17,7 +17,7 @@ import {
   collectionsForAllowlistPicker,
   raindropUploadSegments,
 } from "../src/lib/collections.js";
-import { jobKind } from "../src/lib/queue.js";
+import { jobKind, drainJobPriority } from "../src/lib/queue.js";
 import {
   POLICY,
   JOB,
@@ -141,7 +141,12 @@ console.log("== job kind defaults ==");
 {
   assert.equal(jobKind({ id: "1" }), JOB.UPLOAD);
   assert.equal(jobKind({ id: "pull-9", kind: JOB.PULL_CREATE }), JOB.PULL_CREATE);
-  console.log("  ✔ legacy jobs are upload");
+  assert.ok(
+    drainJobPriority(JOB.RENAME_COLLECTION) < drainJobPriority(JOB.UPLOAD),
+    "rename-collection drains before upload"
+  );
+  assert.equal(drainJobPriority(JOB.UPLOAD), drainJobPriority(JOB.PULL_CREATE));
+  console.log("  ✔ legacy jobs are upload; rename before upload");
 }
 
 console.log("== raindrop folder allowlist ==");

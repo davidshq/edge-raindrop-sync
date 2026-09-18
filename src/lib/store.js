@@ -3,7 +3,8 @@
 // The MV3 service worker is ephemeral, so every piece of state the engine needs
 // to survive a restart lives here: config, per-folder policy overrides, the
 // bidirectional pair map, tombstones, suppressions, collection-path cache,
-// the job queue, and status/log. Opt-in long-term activity history lives in
+// Edge folder→collection map (for in-place folder renames), the job queue,
+// and status/log. Opt-in long-term activity history lives in
 // IndexedDB via log-archive.js (keepLongTermLog), not chrome.storage.local.
 //
 // Pair and suppress mutations share withLock with the queue so concurrent
@@ -334,6 +335,66 @@ export async function uncacheCollection(path) {
 
 export async function clearCollectionCache() {
   await write(KEY.COLLECTION_CACHE, {});
+}
+
+/**
+ * After an in-place Raindrop collection rename, rewrite path→id cache keys
+ * whose leaf (or ancestor prefix) used the old title for this collection id.
+ * @param {string|number} collectionId
+ * @param {string} newTitle
+ */
+export async function rewriteCollectionCacheForRename(collectionId, newTitle) {
+  const cache = await getCollectionCache();
+  const target = String(collectionId);
+  const oldPaths = Object.entries(cache)
+    .filter(([, id]) => String(id) === target)
+    .map(([path]) => path);
+  if (!oldPaths.length) return;
+
+  const next = { ...cache };
+  for (const oldPath of oldPaths) {
+    const parts = oldPath.split("/");
+    parts[parts.length - 1] = newTitle;
+    const newPath = parts.join("/");
+    if (newPath === oldPath) continue;
+    for (const path of Object.keys(next)) {
+      if (path === oldPath || path.startsWith(`${oldPath}/`)) {
+        const rewritten = newPath + path.slice(oldPath.length);
+        next[rewritten] = next[path];
+        delete next[path];
+      }
+    }
+  }
+  await write(KEY.COLLECTION_CACHE, next);
+}
+
+/* ---- Edge folder id → Raindrop collection id (folder renames) ---- */
+
+export async function getFolderCollections() {
+  return read(KEY.FOLDER_COLLECTIONS, {});
+}
+
+export async function getFolderCollectionId(folderId) {
+  if (folderId == null || folderId === "") return null;
+  const map = await getFolderCollections();
+  const id = map[String(folderId)];
+  return id != null ? id : null;
+}
+
+export async function recordFolderCollection(folderId, collectionId) {
+  if (folderId == null || folderId === "" || collectionId == null) return;
+  const map = await getFolderCollections();
+  map[String(folderId)] = collectionId;
+  await write(KEY.FOLDER_COLLECTIONS, map);
+}
+
+export async function clearFolderCollection(folderId) {
+  if (folderId == null || folderId === "") return;
+  const map = await getFolderCollections();
+  const key = String(folderId);
+  if (!(key in map)) return;
+  delete map[key];
+  await write(KEY.FOLDER_COLLECTIONS, map);
 }
 
 /* ---- status + log (surfaced in the UI) ---- */
