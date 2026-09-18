@@ -121,8 +121,29 @@ Optional live Raindrop smoke (disposable `ERS-Verify-*` collections only):
 RAINDROP_TOKEN=xxxxx npm run test:live
 ```
 
+**Integration tests** — real Raindrop CRUD through the sync engine (create,
+rename, edit, delete, move, pull). Edge stays mocked under
+`Favorites bar / test-edge-raindrop-sync / …`; Raindrop writes only under the
+root collection `test-edge-raindrop-sync` (cleaned before/after each scenario):
+
+```bash
+RAINDROP_TOKEN=xxxxx npm run test:integration
+# or: echo token > .tmp/raindrop_token && npm run test:integration
+```
+
+Run before releases or after touching sync / Raindrop / reconcile. Requires exactly
+one Raindrop root collection named `test-edge-raindrop-sync` (delete duplicates
+manually if the run aborts). A passing run leaves that root empty except for the
+collection itself.
+
+API rationing matches the extension: every Raindrop call goes through `gateClient`
+(proactive pause when `X-RateLimit-Remaining` ≤ reserve, capped 429 retries),
+pauses between scenarios/deletes (`INTER_*_PAUSE_MS` in `live-raindrop-scope.mjs`). Expect ~2 minutes per run.
+Raindrop→Edge scenarios enqueue pull jobs directly (reconcile listing lags the live API); reconcile listing is covered by `verify-checklist.mjs`.
+
 Grow scenarios in those scripts when a bug surprises you; don’t add Vitest /
-Playwright until packaging for the store or multi-dev CI needs them.
+Playwright until packaging for the store or multi-dev CI needs them (Playwright
+when you need the real Edge bookmark tree).
 
 ## Lint & format
 
@@ -170,6 +191,9 @@ src/
 scripts/
   verify-bidirectional-logic.mjs  pure helper checks (imports src/lib)
   verify-checklist.mjs            mocked Edge + engine scenarios (optional --live)
+  verify-integration.mjs          live Raindrop + mocked Edge (test:integration)
+  lib/test-harness.mjs            shared chrome.storage / bookmarks mocks
+  lib/live-raindrop-scope.mjs     test-edge-raindrop-sync cleanup + safety guards
   spike-raindrop.mjs              Raindrop API spike (mirroring + bidirectional)
 .github/workflows/
   ci.yml                   lint + format check + npm test on push/PR

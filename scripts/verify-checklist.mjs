@@ -13,141 +13,21 @@
  *   RAINDROP_TOKEN=… node scripts/verify-checklist.mjs --live
  */
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
 import { RAINDROP_API } from "../src/lib/constants.js";
+import {
+  loadToken,
+  importEngine,
+  resetAll,
+  patchClient,
+  edgeUrls,
+  findEdgeByUrl,
+  bookmarks,
+} from "./lib/test-harness.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
 const LIVE = process.argv.includes("--live");
-
-function loadToken() {
-  if (process.env.RAINDROP_TOKEN) return process.env.RAINDROP_TOKEN.trim();
-  const p = path.join(ROOT, ".tmp", "raindrop_token");
-  if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
-  return "";
-}
-
 const TOKEN = loadToken();
 const USE_LIVE = LIVE && !!TOKEN;
-
-/* -------------------------------------------------------------------------- */
-/* In-memory chrome.storage + chrome.bookmarks mock (disposable Edge tree)    */
-/* -------------------------------------------------------------------------- */
-
-const storage = new Map();
-let bmSeq = 100;
-const bookmarks = new Map(); // id -> node
-
-function bmNode(partial) {
-  const id = String(partial.id ?? ++bmSeq);
-  const node = {
-    id,
-    title: partial.title ?? "",
-    url: partial.url,
-    parentId: partial.parentId,
-    children: partial.children,
-  };
-  bookmarks.set(id, node);
-  return node;
-}
-
-// Seed only a disposable Edge profile: Favorites bar + Other favorites, empty.
-function seedEdge() {
-  bookmarks.clear();
-  bmSeq = 100;
-  bmNode({ id: "0", title: "", parentId: undefined, children: undefined });
-  bmNode({ id: "1", title: "Favorites bar", parentId: "0" });
-  bmNode({ id: "2", title: "Other favorites", parentId: "0" });
-}
-
-globalThis.chrome = {
-  storage: {
-    local: {
-      QUOTA_BYTES: 10_485_760,
-      async getBytesInUse() {
-        // Rough estimate for Status UI tests.
-        let n = 0;
-        for (const v of storage.values()) n += JSON.stringify(v).length;
-        return n;
-      },
-      async get(key) {
-        if (typeof key === "string") {
-          if (!storage.has(key)) return {};
-          return { [key]: structuredClone(storage.get(key)) };
-        }
-        const out = {};
-        for (const k of Object.keys(key)) {
-          if (storage.has(k)) out[k] = structuredClone(storage.get(k));
-        }
-        return out;
-      },
-      async set(obj) {
-        for (const [k, v] of Object.entries(obj)) storage.set(k, structuredClone(v));
-      },
-    },
-  },
-  bookmarks: {
-    async get(id) {
-      const n = bookmarks.get(String(id));
-      if (!n) throw new Error("Bookmark not found");
-      return [{ ...n }];
-    },
-    async getChildren(id) {
-      return [...bookmarks.values()]
-        .filter((n) => n.parentId === String(id))
-        .map((n) => ({ ...n }));
-    },
-    async getTree() {
-      const root = { ...bookmarks.get("0"), children: [] };
-      const attach = (parent) => {
-        parent.children = [...bookmarks.values()]
-          .filter((n) => n.parentId === parent.id)
-          .map((n) => {
-            const copy = { ...n };
-            if (!copy.url) attach(copy);
-            return copy;
-          });
-      };
-      attach(root);
-      return [root];
-    },
-    async create({ parentId, title, url }) {
-      return bmNode({ parentId: String(parentId), title, url });
-    },
-    async remove(id) {
-      const n = bookmarks.get(String(id));
-      if (!n) throw new Error("Bookmark not found");
-      if (!n.url) {
-        const kids = [...bookmarks.values()].filter((c) => c.parentId === String(id));
-        if (kids.length) throw new Error("Folder not empty");
-      }
-      bookmarks.delete(String(id));
-    },
-    async update(id, patch) {
-      const n = bookmarks.get(String(id));
-      if (!n) throw new Error("Bookmark not found");
-      if (patch.title !== undefined) n.title = patch.title;
-      if (patch.url !== undefined) n.url = patch.url;
-      return { ...n };
-    },
-    async move(id, destination) {
-      const n = bookmarks.get(String(id));
-      if (!n) throw new Error("Bookmark not found");
-      if (destination.parentId !== undefined) n.parentId = String(destination.parentId);
-      if (destination.index !== undefined) n.index = destination.index;
-      return { ...n };
-    },
-  },
-  alarms: { create() {}, onAlarm: { addListener() {} } },
-  runtime: {
-    onInstalled: { addListener() {} },
-    onStartup: { addListener() {} },
-    onMessage: { addListener() {} },
-  },
-};
 
 /* -------------------------------------------------------------------------- */
 /* Optional live Raindrop client scoped to ERS-Verify-* only                  */
@@ -297,46 +177,6 @@ function makeMockRaindrop() {
       return item;
     },
   };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Wire real modules against mocks                                            */
-/* -------------------------------------------------------------------------- */
-
-async function importEngine() {
-  const base = pathToFileURL(path.join(ROOT, "src/lib")).href;
-  const constants = await import(`${base}/constants.js`);
-  const store = await import(`${base}/store.js`);
-  const queue = await import(`${base}/queue.js`);
-  const sync = await import(`${base}/sync.js`);
-  const reconcile = await import(`${base}/reconcile.js`);
-  const raindropMod = await import(`${base}/raindrop.js`);
-  return { constants, store, queue, sync, reconcile, raindropMod };
-}
-
-function patchClient(raindropMod, clientImpl) {
-  // Replace RaindropClient constructor used by sync/reconcile by monkeypatching prototype methods
-  const Proto = raindropMod.RaindropClient.prototype;
-  for (const key of Object.keys(clientImpl)) {
-    if (key.startsWith("_")) continue;
-    Proto[key] = function (...args) {
-      return clientImpl[key](...args);
-    };
-  }
-}
-
-async function resetAll(store) {
-  storage.clear();
-  seedEdge();
-  await store.ensurePairsMigrated();
-}
-
-function edgeUrls() {
-  return [...bookmarks.values()].filter((n) => n.url).map((n) => n.url);
-}
-
-function findEdgeByUrl(url) {
-  return [...bookmarks.values()].find((n) => n.url === url);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1991,7 +1831,6 @@ async function scenario72_deadLetterAndStorage() {
   const eng = await importEngine();
   const { MAX_JOB_ATTEMPTS } = eng.constants;
   await resetAll(eng.store);
-  seedEdge();
 
   // Storage usage reports via getBytesInUse mock.
   const usage = await eng.store.getStorageUsage();
