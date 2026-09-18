@@ -27,6 +27,7 @@ import {
   getReconcileState,
   getConfig,
   ensurePairsMigrated,
+  getStorageUsage,
 } from "../lib/store.js";
 
 function ensureHeartbeat() {
@@ -111,10 +112,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             ok: true,
             status: await getStatus(),
             pending: await queue.size(),
+            deadLetter: await queue.deadLetterSize(),
+            storage: await getStorageUsage(),
             log: await getLog(),
             reconcile: await getReconcileState(),
             syncMode: config.syncMode,
           });
+          break;
+        }
+        case MSG.RETRY_DEAD_LETTER: {
+          const retried = await queue.retryDeadLetter();
+          if (retried > 0) await drain();
+          sendResponse({ ok: true, retried });
+          break;
+        }
+        case MSG.CLEAR_DEAD_LETTER: {
+          await queue.clearDeadLetter();
+          sendResponse({ ok: true });
           break;
         }
         default:

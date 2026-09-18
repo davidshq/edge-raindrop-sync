@@ -55,6 +55,8 @@ export const MSG = {
   RUN_BACKFILL: "runBackfill",
   RECONCILE_NOW: "reconcileNow",
   DRAIN_NOW: "drainNow",
+  RETRY_DEAD_LETTER: "retryDeadLetter",
+  CLEAR_DEAD_LETTER: "clearDeadLetter",
 };
 
 // chrome.storage.local keys. Everything durable lives under these — the MV3
@@ -63,6 +65,8 @@ export const KEY = {
   CONFIG: "config", // { token, rootName, defaultPolicy, pruneEmpty, syncMode, raindropFolderMode, raindropFolderAllowlist }
   OVERRIDES: "overrides", // { [bookmarkFolderId]: { policy, path } }
   QUEUE: "queue", // [ { id, kind, attempts, nextAttemptAt, ... } ]
+  /** Poison / exhausted jobs removed from QUEUE: [{ ...job, lastError, deadAt }] */
+  DEAD_LETTER: "deadLetter",
   DEDUP: "dedup", // legacy { [bookmarkId]: raindropId } — read once into PAIRS, not dual-written
   PAIRS: "pairs", // { byBookmark: { [bookmarkId]: raindropId }, byRaindrop: { [raindropId]: bookmarkId } }
   TOMBSTONES: "tombstones", // { [raindropId]: { at, reason } }
@@ -106,10 +110,17 @@ export const HEARTBEAT_MINUTES = 1;
  */
 export const MIN_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
 
-// Retry/backoff tuning. Backoff is capped so a stuck job keeps being retried.
+// Retry/backoff tuning. Backoff is capped; after MAX_JOB_ATTEMPTS the job
+// moves to the dead-letter list instead of retrying forever.
 export const MAX_BACKOFF_MS = 5 * 60 * 1000; // 5 minutes
 export const BASE_BACKOFF_MS = 2000; // 2s, doubled per attempt
+/** Transient failures beyond this count → dead-letter (rate-limit / auth exempt). */
+export const MAX_JOB_ATTEMPTS = 20;
+/** Soft cap on dead-letter entries retained in chrome.storage.local. */
+export const DEAD_LETTER_LIMIT = 200;
 export const RATE_LIMIT_FALLBACK_MS = 60 * 1000; // if no Retry-After header
+/** Fallback when chrome.storage.local.QUOTA_BYTES is unavailable (typical Chromium). */
+export const STORAGE_QUOTA_FALLBACK_BYTES = 10_485_760;
 /** Stop Raindrop work early when X-RateLimit-Remaining falls to this. */
 export const RATE_LIMIT_RESERVE = 8;
 /** Cap queue drains per tick so a large backlog cannot burn the whole minute budget. */

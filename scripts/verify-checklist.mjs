@@ -66,6 +66,13 @@ function seedEdge() {
 globalThis.chrome = {
   storage: {
     local: {
+      QUOTA_BYTES: 10_485_760,
+      async getBytesInUse() {
+        // Rough estimate for Status UI tests.
+        let n = 0;
+        for (const v of storage.values()) n += JSON.stringify(v).length;
+        return n;
+      },
       async get(key) {
         if (typeof key === "string") {
           if (!storage.has(key)) return {};
@@ -1084,33 +1091,24 @@ async function scenario67_raindropFolderAllowlist() {
   await eng.sync.drain();
   const pulledIndie = findEdgeByUrl("https://example.com/ers-verify-indie-outside");
   assert.ok(pulledIndie, "outside-root allowlisted pulls");
-  const indieFolder = [...bookmarks.values()].find(
-    (n) => !n.url && n.title === "IndieOutside",
-  );
+  const indieFolder = [...bookmarks.values()].find((n) => !n.url && n.title === "IndieOutside");
   assert.ok(indieFolder, "outside-root IndieOutside folder created");
   const raindropContainer = bookmarks.get(String(indieFolder.parentId));
   assert.equal(
     raindropContainer?.title,
     "Raindrop",
-    "outside-root folder under Other favorites / Raindrop",
+    "outside-root folder under Other favorites / Raindrop"
   );
-  assert.equal(
-    raindropContainer?.parentId,
-    "2",
-    "Raindrop container lives under Other favorites",
-  );
+  assert.equal(raindropContainer?.parentId, "2", "Raindrop container lives under Other favorites");
   // Second reconcile: still present in Raindrop, must not queue Edge delete.
   await eng.reconcile.reconcile();
   await eng.sync.drain();
   assert.ok(
     findEdgeByUrl("https://example.com/ers-verify-indie-outside"),
-    "outside-root pair survives second reconcile (no false delete)",
+    "outside-root pair survives second reconcile (no false delete)"
   );
   const pairs = await eng.store.getPairs();
-  assert.ok(
-    pairs.byRaindrop[String(indieItem._id)],
-    "pair still mapped after second reconcile",
-  );
+  assert.ok(pairs.byRaindrop[String(indieItem._id)], "pair still mapped after second reconcile");
 
   // Drop into Other favorites / Raindrop / IndieOutside → original outside-root collection.
   const dropped = await chrome.bookmarks.create({
@@ -1121,13 +1119,13 @@ async function scenario67_raindropFolderAllowlist() {
   await eng.queue.enqueue(dropped.id);
   await eng.sync.drain();
   const droppedRain = [...mock._raindrops.values()].find(
-    (r) => r.link === "https://example.com/ers-verify-indie-drop",
+    (r) => r.link === "https://example.com/ers-verify-indie-drop"
   );
   assert.ok(droppedRain, "drop under Raindrop/ uploads to Raindrop");
   assert.equal(
     Number(droppedRain.collection?.$id),
     Number(indie._id),
-    "drop lands in original outside-root collection (not Edge/Other favorites/Raindrop/…)",
+    "drop lands in original outside-root collection (not Edge/Other favorites/Raindrop/…)"
   );
 
   // Clear allowlist: outside-root pair must still survive (getRaindrop confirm).
@@ -1138,11 +1136,11 @@ async function scenario67_raindropFolderAllowlist() {
   await eng.sync.drain();
   assert.ok(
     findEdgeByUrl("https://example.com/ers-verify-indie-outside"),
-    "outside-root pair survives Clear selection / empty allowlist",
+    "outside-root pair survives Clear selection / empty allowlist"
   );
   assert.ok(
     (await eng.store.getPairs()).byRaindrop[String(indieItem._id)],
-    "pair still mapped after clearing allowlist",
+    "pair still mapped after clearing allowlist"
   );
 
   console.log(
@@ -1283,7 +1281,9 @@ async function scenario68_rateLimitBudget() {
   assert.equal(manual.reason, "rate_limited", "reconcileNow skip reason is rate_limited");
   assert.equal(await eng.store.isRateLimited(), true, "reconcileNow 429 sets global pause");
 
-  console.log("  ✔ global gate, capped confirms, round-robin, skip reasons, cooldown, reconcileNow gate");
+  console.log(
+    "  ✔ global gate, capped confirms, round-robin, skip reasons, cooldown, reconcileNow gate"
+  );
 }
 
 async function scenario69_bookmarkMoves() {
@@ -1600,9 +1600,7 @@ async function scenario70_onChangedAndFolderRename() {
   );
   const logRename = await eng.store.getLog();
   assert.ok(
-    logRename.some(
-      (e) => typeof e.message === "string" && e.message.startsWith("Renamed folder:")
-    ),
+    logRename.some((e) => typeof e.message === "string" && e.message.startsWith("Renamed folder:")),
     "activity logs Renamed folder:"
   );
 
@@ -1626,7 +1624,11 @@ async function scenario70_onChangedAndFolderRename() {
     parentId: "1",
     title: "ERS-Excl-Folder-Rename",
   });
-  await eng.store.setOverride(exclFolder.id, POLICY.EXCLUDE, "Favorites bar/ERS-Excl-Folder-Rename");
+  await eng.store.setOverride(
+    exclFolder.id,
+    POLICY.EXCLUDE,
+    "Favorites bar/ERS-Excl-Folder-Rename"
+  );
   await eng.store.recordFolderCollection(exclFolder.id, folderColId);
   bookmarks.get(exclFolder.id).title = "ERS-Excl-Renamed";
   await eng.sync.handleBookmarkChanged(exclFolder.id, { title: "ERS-Excl-Renamed" });
@@ -1886,7 +1888,9 @@ async function scenario71_tombstonePruneAndPullUpdate() {
   await eng.reconcile.reconcile({ force: true });
   const jobs = await eng.queue.list();
   assert.ok(
-    jobs.some((j) => eng.queue.jobKind(j) === JOB.PULL_UPDATE && String(j.raindropId) === String(remote._id)),
+    jobs.some(
+      (j) => eng.queue.jobKind(j) === JOB.PULL_UPDATE && String(j.raindropId) === String(remote._id)
+    ),
     "pull-update enqueued"
   );
   await eng.sync.drain();
@@ -1961,7 +1965,8 @@ async function scenario71_tombstonePruneAndPullUpdate() {
   assert.ok(
     renameJobs.some(
       (j) =>
-        eng.queue.jobKind(j) === JOB.PULL_RENAME_FOLDER && String(j.folderId) === String(edgeFolder.id)
+        eng.queue.jobKind(j) === JOB.PULL_RENAME_FOLDER &&
+        String(j.folderId) === String(edgeFolder.id)
     ),
     "pull-rename-folder enqueued"
   );
@@ -1979,6 +1984,75 @@ async function scenario71_tombstonePruneAndPullUpdate() {
   );
 
   console.log("  ✔ tombstone prune; Raindrop→Edge title/URL/move/folder rename; change suppress");
+}
+
+async function scenario72_deadLetterAndStorage() {
+  console.log("\n== 7.2 Dead-letter + storage usage ==");
+  const eng = await importEngine();
+  const { MAX_JOB_ATTEMPTS } = eng.constants;
+  await resetAll(eng.store);
+  seedEdge();
+
+  // Storage usage reports via getBytesInUse mock.
+  const usage = await eng.store.getStorageUsage();
+  assert.ok(typeof usage.bytesInUse === "number", "bytesInUse");
+  assert.ok(usage.quotaBytes > 0, "quotaBytes");
+
+  // Exhaust retries on a poison upload (bookmark missing → process removes; use
+  // a job that throws: delete-raindrop with a client that always fails).
+  const mock = makeMockRaindrop();
+  mock.deleteRaindrop = async () => {
+    throw new Error("poison-delete");
+  };
+  patchClient(eng.raindropMod, mock);
+  await eng.store.setConfig({
+    token: "t",
+    syncMode: eng.constants.SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: eng.constants.POLICY.SYNC_KEEP,
+    rootName: "Edge",
+  });
+
+  await eng.queue.enqueueJob({
+    id: "dr-999",
+    kind: eng.constants.JOB.DELETE_RAINDROP,
+    raindropId: "999",
+  });
+  // Pre-set attempts just below the cap so one defer lands in dead-letter.
+  const jobs = await eng.queue.list();
+  jobs[0].attempts = MAX_JOB_ATTEMPTS - 1;
+  await chrome.storage.local.set({ queue: jobs });
+
+  await eng.sync.drain();
+  assert.equal(await eng.queue.size(), 0, "removed from active queue");
+  assert.equal(await eng.queue.deadLetterSize(), 1, "in dead-letter");
+  const dead = await eng.queue.listDeadLetter();
+  assert.match(dead[0].lastError || "", /poison-delete/);
+
+  const retried = await eng.queue.retryDeadLetter();
+  assert.equal(retried, 1, "retried");
+  assert.equal(await eng.queue.deadLetterSize(), 0, "dlq cleared");
+  assert.equal(await eng.queue.size(), 1, "back on queue");
+  const again = await eng.queue.list();
+  assert.equal(again[0].attempts, 0, "attempts reset");
+
+  await eng.queue.clearDeadLetter(); // noop
+  // Put one in DLQ and clear without retry
+  await eng.queue.clear();
+  await eng.queue.enqueueJob({
+    id: "dr-998",
+    kind: eng.constants.JOB.DELETE_RAINDROP,
+    raindropId: "998",
+  });
+  const q2 = await eng.queue.list();
+  q2[0].attempts = MAX_JOB_ATTEMPTS - 1;
+  await chrome.storage.local.set({ queue: q2 });
+  await eng.sync.drain();
+  assert.equal(await eng.queue.deadLetterSize(), 1);
+  await eng.queue.clearDeadLetter();
+  assert.equal(await eng.queue.deadLetterSize(), 0);
+  assert.equal(await eng.queue.size(), 0, "clear does not re-enqueue");
+
+  console.log("  ✔ dead-letter after max attempts; retry/clear; storage usage");
 }
 
 async function optionalLiveSmoke() {
@@ -2045,6 +2119,7 @@ async function main() {
   await scenario69_bookmarkMoves();
   await scenario70_onChangedAndFolderRename();
   await scenario71_tombstonePruneAndPullUpdate();
+  await scenario72_deadLetterAndStorage();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

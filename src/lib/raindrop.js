@@ -15,11 +15,7 @@
 //
 // X-RateLimit-Reset is normalized once via #parseResetAt (epoch ms or seconds).
 
-import {
-  RAINDROP_API,
-  RATE_LIMIT_FALLBACK_MS,
-  RATE_LIMIT_RESERVE,
-} from "./constants.js";
+import { RAINDROP_API, RATE_LIMIT_FALLBACK_MS, RATE_LIMIT_RESERVE } from "./constants.js";
 
 export class AuthError extends Error {}
 export class RateLimitError extends Error {

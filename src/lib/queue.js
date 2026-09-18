@@ -5,10 +5,23 @@
 // Legacy jobs with only `{ id }` are treated as upload jobs (id = bookmarkId).
 // Enqueue is idempotent per job id.
 //
+// After MAX_JOB_ATTEMPTS transient failures, defer moves the job into
+// KEY.DEAD_LETTER (same withLock) so poison work stops consuming drain budget.
+// QUEUE and DEAD_LETTER are written in one storage.set so a quota failure
+// cannot drop the job from both lists. Rate-limit deferUntil does not
+// increment attempts and never dead-letters.
+//
 // Mutations go through withLock so drain/remove cannot race enqueue and drop jobs.
 
-import { KEY, BASE_BACKOFF_MS, MAX_BACKOFF_MS, JOB } from "./constants.js";
-import { _read, _write } from "./store.js";
+import {
+  KEY,
+  BASE_BACKOFF_MS,
+  MAX_BACKOFF_MS,
+  MAX_JOB_ATTEMPTS,
+  DEAD_LETTER_LIMIT,
+  JOB,
+} from "./constants.js";
+import { _read, _write, _writeMany } from "./store.js";
 import { withLock } from "./mutex.js";
 
 async function readQueue() {
@@ -17,6 +30,14 @@ async function readQueue() {
 
 async function writeQueue(jobs) {
   await _write(KEY.QUEUE, jobs);
+}
+
+async function readDeadLetter() {
+  return _read(KEY.DEAD_LETTER, []);
+}
+
+async function writeDeadLetter(entries) {
+  await _write(KEY.DEAD_LETTER, entries);
 }
 
 export function jobKind(job) {
@@ -38,6 +59,14 @@ export async function list() {
 
 export async function size() {
   return (await readQueue()).length;
+}
+
+export async function listDeadLetter() {
+  return readDeadLetter();
+}
+
+export async function deadLetterSize() {
+  return (await readDeadLetter()).length;
 }
 
 /**
@@ -119,20 +148,46 @@ export async function due(now) {
     .sort((a, b) => drainJobPriority(jobKind(a)) - drainJobPriority(jobKind(b)));
 }
 
-// Defer a job with exponential backoff (used for transient/unknown errors).
-export async function defer(id, now) {
+/**
+ * Defer a job with exponential backoff, or dead-letter when attempts hit the cap.
+ * @param {string} id
+ * @param {number} now
+ * @param {{ lastError?: string }} [opts]
+ * @returns {Promise<{ action: "missing"|"deferred"|"dead-lettered", attempts?: number }>}
+ */
+export async function defer(id, now, { lastError } = {}) {
   return withLock(async () => {
     const jobs = await readQueue();
-    const job = jobs.find((j) => j.id === id);
-    if (!job) return;
+    const idx = jobs.findIndex((j) => j.id === id);
+    if (idx < 0) return { action: "missing" };
+    const job = jobs[idx];
     job.attempts = (job.attempts ?? 0) + 1;
+
+    if (job.attempts >= MAX_JOB_ATTEMPTS) {
+      jobs.splice(idx, 1);
+      const dead = await readDeadLetter();
+      dead.unshift({
+        ...job,
+        lastError: lastError != null ? String(lastError) : null,
+        deadAt: now,
+      });
+      // One set for both keys — never leave the job in neither list.
+      await _writeMany({
+        [KEY.QUEUE]: jobs,
+        [KEY.DEAD_LETTER]: dead.slice(0, DEAD_LETTER_LIMIT),
+      });
+      return { action: "dead-lettered", attempts: job.attempts };
+    }
+
     const backoff = Math.min(BASE_BACKOFF_MS * 2 ** (job.attempts - 1), MAX_BACKOFF_MS);
     job.nextAttemptAt = now + backoff;
     await writeQueue(jobs);
+    return { action: "deferred", attempts: job.attempts };
   });
 }
 
 // Defer a job by an explicit delay (used for rate-limit Retry-After).
+// Does not increment attempts and never dead-letters.
 export async function deferUntil(id, until) {
   return withLock(async () => {
     const jobs = await readQueue();
@@ -166,5 +221,44 @@ export async function deferAllDueUntil(until, now = Date.now()) {
 export async function clear() {
   return withLock(async () => {
     await writeQueue([]);
+  });
+}
+
+/** Empty the dead-letter list without re-enqueueing. */
+export async function clearDeadLetter() {
+  return withLock(async () => {
+    await writeDeadLetter([]);
+  });
+}
+
+/**
+ * Re-enqueue every dead-lettered job with attempts reset; clear the DLQ.
+ * @returns {Promise<number>} how many jobs were re-enqueued
+ */
+export async function retryDeadLetter() {
+  return withLock(async () => {
+    const dead = await readDeadLetter();
+    if (!dead.length) return 0;
+    const jobs = await readQueue();
+    const byId = new Map(jobs.map((j) => [j.id, j]));
+    let added = 0;
+    for (const entry of dead) {
+      const { lastError: _le, deadAt: _da, ...rest } = entry;
+      const job = {
+        ...rest,
+        attempts: 0,
+        nextAttemptAt: 0,
+      };
+      if (byId.has(job.id)) continue;
+      jobs.push(job);
+      byId.set(job.id, job);
+      added++;
+    }
+    // One set — avoid re-enqueued jobs still sitting in the DLQ after a partial write.
+    await _writeMany({
+      [KEY.QUEUE]: jobs,
+      [KEY.DEAD_LETTER]: [],
+    });
+    return added;
   });
 }

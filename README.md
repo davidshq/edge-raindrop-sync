@@ -155,8 +155,15 @@ src/
     bookmarks.js           chrome.bookmarks wrappers + shared mirror path placement
     policy.js              nearest-ancestor policy resolution
     allowlist.js           Raindrop-only collection allowlist gate
-    sync.js                drain engine (upload / pull / delete jobs)
-    reconcile.js           Raindrop→Edge listing + remote-delete detection
+    sync.js                facade: drain, live handlers, tick, reconcileNow
+    drain.js               queue drain loop
+    job-processors.js      upload / pull / delete / rename job handlers
+    live-handlers.js       onCreated / onRemoved / onMoved / onChanged
+    client-errors.js       Auth / rate-limit gate for drain + reconcile
+    reconcile.js           Raindrop→Edge listing orchestration
+    reconcile-enqueue.js   pull-create / pull-update enqueue helpers
+    reconcile-finish.js    delete-detect, tombstone prune, folder-rename pull
+    pull-update.js         shared Raindrop→Edge drift plan
     backfill.js            one-shot existing-bookmark sweep
   options/                 settings, sync mode, folder policies, status + log
   popup/                   compact status + quick actions
@@ -164,6 +171,8 @@ scripts/
   verify-bidirectional-logic.mjs  pure helper checks (imports src/lib)
   verify-checklist.mjs            mocked Edge + engine scenarios (optional --live)
   spike-raindrop.mjs              Raindrop API spike (mirroring + bidirectional)
+.github/workflows/
+  ci.yml                   lint + format check + npm test on push/PR
 ```
 
 
@@ -172,6 +181,11 @@ scripts/
 - **Identity:** the `chrome.bookmarks` API does not expose the on-disk Chromium
   GUID, so the extension keys pairs and policy overrides on the bookmark node
   `id`, which is stable across restarts and survives renames/moves.
+- **Dead-letter:** after 20 transient failures a job leaves the active queue for
+  Options → Status (Retry or Clear). Rate-limit pauses and auth halts do not
+  dead-letter by themselves.
+- **Storage:** Status shows approximate `chrome.storage.local` usage; write
+  failures set `lastError` without taking down the service worker.
 - **Auth:** uses a personal test token (no OAuth). Single-user, sideloaded.
 - **Deletes in bidirectional mode:** only **user** deletes propagate (including
   every paired bookmark under a deleted folder via `removeInfo.node`). Folder

@@ -127,9 +127,11 @@
         <h2>Status</h2>
         <div id="haltBanner" class="banner hidden"></div>
         <p class="status-line">
-          Pending in queue: <strong id="pending">0</strong> · Last activity:
+          Pending in queue: <strong id="pending">0</strong> · Dead-lettered:
+          <strong id="deadLetter">0</strong> · Last activity:
           <span id="lastActivity">—</span>
         </p>
+        <p class="status-line muted">Local storage: <span id="storageUsage">—</span></p>
         <p id="reconcileLine" class="status-line muted hidden">
           Last reconcile: <span id="lastReconcile">—</span>
         </p>
@@ -137,6 +139,11 @@
           <button id="backfill" type="button">Run backfill now</button>
           <button id="reconcile" type="button" class="secondary hidden">Reconcile now</button>
           <span id="backfillStatus" class="hint"></span>
+        </div>
+        <div id="deadLetterRow" class="row hidden">
+          <button id="retryDeadLetter" type="button" class="secondary">Retry dead-lettered</button>
+          <button id="clearDeadLetter" type="button" class="secondary">Clear dead-lettered</button>
+          <span id="deadLetterStatus" class="hint"></span>
         </div>
         <h3>Recent activity</h3>
         <p class="hint">Newest 500 lines in local storage (older recent lines drop off).</p>
@@ -167,16 +174,14 @@
           <summary>Choose Raindrop-only collections to sync</summary>
           <div class="rd-body">
             <p class="hint intro">
-              All Raindrop collections that are not fully present in Edge (entire account,
-              not only under the sync root). Check to create the folder and pull items.
-              Folders outside the sync root land under Other favorites / Raindrop;
-              bookmarks you add there upload back to that Raindrop collection.
-              New collections stay unchecked. Once any are checked, only checked
-              Raindrop-only paths sync. <strong>Select all</strong> checks every listed
-              collection; <strong>Clear selection</strong> exits selective mode (then
-              save). Reconcile does not clear checked collections when folders appear —
-              only when they disappear from Raindrop. Saves with
-              <strong>Save folder policies</strong>.
+              All Raindrop collections that are not fully present in Edge (entire account, not only
+              under the sync root). Check to create the folder and pull items. Folders outside the
+              sync root land under Other favorites / Raindrop; bookmarks you add there upload back
+              to that Raindrop collection. New collections stay unchecked. Once any are checked,
+              only checked Raindrop-only paths sync. <strong>Select all</strong> checks every listed
+              collection; <strong>Clear selection</strong> exits selective mode (then save).
+              Reconcile does not clear checked collections when folders appear — only when they
+              disappear from Raindrop. Saves with <strong>Save folder policies</strong>.
             </p>
             <div class="rd-toolbar">
               <button id="refreshRaindropOnly" type="button" class="secondary">Refresh</button>

@@ -12,7 +12,15 @@
 // Legacy DEDUP is migrated into PAIRS on first load; pair mutations write PAIRS only.
 // Confirmed deletes/offloads use clearPairWithTombstone (tombstone + forget pair).
 
-import { KEY, DEFAULT_CONFIG, LOG_LIMIT, SUPPRESS_MS, POLICY, SYNC_MODE } from "./constants.js";
+import {
+  KEY,
+  DEFAULT_CONFIG,
+  LOG_LIMIT,
+  SUPPRESS_MS,
+  POLICY,
+  SYNC_MODE,
+  STORAGE_QUOTA_FALLBACK_BYTES,
+} from "./constants.js";
 import { withLock } from "./mutex.js";
 import { appendArchiveEntry } from "./log-archive.js";
 
@@ -21,8 +29,70 @@ async function read(key, fallback) {
   return key in got ? got[key] : fallback;
 }
 
+/**
+ * Persist a key. On failure, record lastError (when possible) and rethrow so
+ * callers can defer/retry — the SW itself is not crashed by an unhandled throw
+ * when callers catch.
+ */
 async function write(key, value) {
-  await chrome.storage.local.set({ [key]: value });
+  try {
+    await chrome.storage.local.set({ [key]: value });
+  } catch (err) {
+    await noteStorageWriteFailure(key, err);
+    throw err;
+  }
+}
+
+/**
+ * Persist several keys in one chrome.storage.local.set (atomic for that batch).
+ * Used when moving a job from QUEUE → DEAD_LETTER so a mid-flight quota failure
+ * cannot drop the job from both lists.
+ * @param {Record<string, unknown>} obj
+ */
+async function writeMany(obj) {
+  const keys = Object.keys(obj);
+  try {
+    await chrome.storage.local.set(obj);
+  } catch (err) {
+    await noteStorageWriteFailure(keys.join(","), err);
+    throw err;
+  }
+}
+
+async function noteStorageWriteFailure(keyLabel, err) {
+  const message = `Storage write failed (${keyLabel}): ${err?.message || err}`;
+  console.error("[ers]", message, err);
+  if (keyLabel === KEY.STATUS || String(keyLabel).split(",").includes(KEY.STATUS)) {
+    return;
+  }
+  try {
+    const status = await read(KEY.STATUS, {});
+    await chrome.storage.local.set({
+      [KEY.STATUS]: { ...status, lastError: message },
+    });
+  } catch (statusErr) {
+    console.error("[ers] could not record storage failure in status:", statusErr);
+  }
+}
+
+/**
+ * Approximate chrome.storage.local usage for Status UI.
+ * @returns {Promise<{ bytesInUse: number, quotaBytes: number }>}
+ */
+export async function getStorageUsage() {
+  let bytesInUse = 0;
+  try {
+    if (typeof chrome.storage.local.getBytesInUse === "function") {
+      bytesInUse = await chrome.storage.local.getBytesInUse(null);
+    }
+  } catch (err) {
+    console.error("[ers] getBytesInUse failed:", err);
+  }
+  const quotaBytes =
+    typeof chrome.storage.local.QUOTA_BYTES === "number"
+      ? chrome.storage.local.QUOTA_BYTES
+      : STORAGE_QUOTA_FALLBACK_BYTES;
+  return { bytesInUse, quotaBytes };
 }
 
 /* ---- config ---- */
@@ -477,9 +547,13 @@ export async function getLog() {
 
 export async function appendLog(level, message, at) {
   const entry = { at: at ?? Date.now(), level, message };
-  const log = await getLog();
-  log.unshift(entry);
-  await write(KEY.LOG, log.slice(0, LOG_LIMIT));
+  try {
+    const log = await getLog();
+    log.unshift(entry);
+    await write(KEY.LOG, log.slice(0, LOG_LIMIT));
+  } catch (err) {
+    console.error("[ers] appendLog storage failed:", err);
+  }
   // Opt-in IndexedDB archive; never fail the recent write or sync path.
   try {
     const { keepLongTermLog } = await getConfig();
@@ -489,4 +563,4 @@ export async function appendLog(level, message, at) {
   }
 }
 
-export { read as _read, write as _write };
+export { read as _read, write as _write, writeMany as _writeMany };

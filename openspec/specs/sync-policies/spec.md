@@ -39,11 +39,11 @@ The effective policy for a bookmark SHALL be the policy of the nearest ancestor 
 - **THEN** the bookmark resolves to the global default policy
 
 ### Requirement: GUID-keyed policy overrides
-Per-folder policy overrides SHALL be stored keyed by the folder's GUID so that overrides survive folder renames. The configuration UI SHALL display the human-readable folder path for each override.
+Per-folder policy overrides SHALL be stored keyed by the folder's Chromium node `id` so that overrides survive folder renames (the extensions API does not expose the on-disk GUID; historical docs used "GUID" for this identity). The configuration UI SHALL display the human-readable folder path for each override.
 
 #### Scenario: Folder is renamed
 - **WHEN** a folder with an explicit override is renamed in Edge
-- **THEN** the override still applies because it is keyed by the unchanged GUID
+- **THEN** the override still applies because it is keyed by the unchanged node id
 
 ### Requirement: Instant local deletion on confirmed sync
 When the effective policy is `sync-and-delete`, the bookmark SHALL be removed from Edge immediately after — and only after — the Raindrop write is confirmed.

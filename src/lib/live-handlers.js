@@ -1,0 +1,208 @@
+// Live Edge bookmark listeners: enqueue durable jobs and signal drain.
+// Does not call the Raindrop API directly.
+
+import { JOB, SYNC_MODE, POLICY } from "./constants.js";
+import {
+  getConfig,
+  getOverrides,
+  getRaindropId,
+  hasSynced,
+  getFolderCollectionId,
+  consumeRemoveSuppression,
+  consumeCreateSuppression,
+  isChangeSuppressed,
+  appendLog,
+} from "./store.js";
+import * as queue from "./queue.js";
+import {
+  getNode,
+  ancestorIdsFromFolder,
+  folderPolicyAncestorIds,
+  collectUrlDescendantIds,
+} from "./bookmarks.js";
+import { resolvePolicy, isExcluded } from "./policy.js";
+import { drain } from "./drain.js";
+
+/**
+ * URL nodes removed by an onRemoved event.
+ * Chromium notifies once for a folder delete and embeds the tree in
+ * `removeInfo.node` — walk it so nested bookmarks are not orphaned in Raindrop.
+ *
+ * @param {string} removedId
+ * @param {{ parentId?: string, node?: object }} [removeInfo]
+ * @returns {{ id: string, pathFolderIds: string[], liveParentId: string|null }[]}
+ *   `pathFolderIds` is nearest-first folders inside the deleted tree;
+ *   `liveParentId` is the still-existing parent of the removed root.
+ */
+export function collectRemovedUrlNodes(removedId, removeInfo) {
+  const tree = removeInfo?.node;
+  const liveParentId =
+    removeInfo?.parentId != null && removeInfo.parentId !== "" ? String(removeInfo.parentId) : null;
+
+  if (!tree) {
+    return [{ id: String(removedId), pathFolderIds: [], liveParentId }];
+  }
+
+  const out = [];
+  const walk = (n, folderAncestorsNearestFirst) => {
+    if (n.url) {
+      out.push({
+        id: String(n.id),
+        pathFolderIds: folderAncestorsNearestFirst,
+        liveParentId,
+      });
+      return;
+    }
+    const next = [String(n.id), ...folderAncestorsNearestFirst];
+    for (const c of n.children ?? []) walk(c, next);
+  };
+  walk(tree, []);
+  return out;
+}
+
+/**
+ * Handle a user (or extension) remove of an Edge bookmark or folder.
+ * Policy-suppressed removes are ignored; mapped user deletes enqueue Raindrop
+ * delete unless the bookmark lived under an effective `exclude` policy.
+ * Folder deletes walk `removeInfo.node` (Chromium's recursive payload).
+ * @param {string} bookmarkId
+ * @param {{ parentId?: string, node?: object }} [removeInfo] from chrome.bookmarks.onRemoved
+ */
+export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
+  if (await consumeRemoveSuppression(bookmarkId)) return;
+
+  const config = await getConfig();
+  if (config.syncMode !== SYNC_MODE.BIDIRECTIONAL) return;
+
+  const targets = collectRemovedUrlNodes(bookmarkId, removeInfo);
+  if (!targets.length) return;
+
+  const overrides = await getOverrides();
+  let queued = 0;
+
+  for (const target of targets) {
+    const raindropId = await getRaindropId(target.id);
+    if (!raindropId) continue;
+
+    const liveAncestors = target.liveParentId
+      ? await ancestorIdsFromFolder(target.liveParentId)
+      : [];
+    const ancestorIds = [...target.pathFolderIds, ...liveAncestors];
+    if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) {
+      await appendLog("info", `Skipped Raindrop delete for excluded Edge bookmark ${target.id}.`);
+      continue;
+    }
+
+    const added = await queue.enqueueJob({
+      id: `dr-${raindropId}`,
+      kind: JOB.DELETE_RAINDROP,
+      raindropId,
+      bookmarkId: target.id,
+    });
+    if (added) {
+      queued++;
+      await appendLog("info", `Queued Raindrop delete for removed Edge bookmark ${target.id}.`);
+    }
+  }
+
+  if (queued > 0) await drain();
+}
+
+/**
+ * Handle Edge bookmark create — skip enqueue when pull/extension-authored or already paired.
+ */
+export async function handleBookmarkCreated(id, node) {
+  if (!node?.url) return;
+  if (await consumeCreateSuppression(node.url)) return;
+  if (await hasSynced(id)) return;
+  await queue.enqueue(id);
+  await drain();
+}
+
+/**
+ * Handle Edge bookmark or folder move (parent change).
+ * Same-parent reorders are ignored. URL nodes enqueue an upload job; folders
+ * fan out to live descendant URL bookmarks (Chromium does not fire per child).
+ * Drain updates Raindrop collection for pairs or creates when unpaired.
+ *
+ * @param {string} id
+ * @param {{ parentId?: string, oldParentId?: string }} [moveInfo] from chrome.bookmarks.onMoved
+ */
+export async function handleBookmarkMoved(id, moveInfo) {
+  if (await isChangeSuppressed(id)) return;
+
+  const oldParent =
+    moveInfo?.oldParentId != null && moveInfo.oldParentId !== ""
+      ? String(moveInfo.oldParentId)
+      : null;
+  const newParent =
+    moveInfo?.parentId != null && moveInfo.parentId !== "" ? String(moveInfo.parentId) : null;
+  if (oldParent != null && newParent != null && oldParent === newParent) return;
+
+  let node;
+  try {
+    node = await getNode(id);
+  } catch {
+    return;
+  }
+
+  const ids = node.url ? [String(id)] : await collectUrlDescendantIds(id);
+  if (!ids.length) return;
+
+  // Folder fan-out: skip children that are themselves change-suppressed.
+  const toEnqueue = [];
+  for (const bid of ids) {
+    if (await isChangeSuppressed(bid)) continue;
+    toEnqueue.push(bid);
+  }
+  if (!toEnqueue.length) return;
+
+  await queue.enqueueMany(toEnqueue, { reason: "move" });
+  await drain();
+}
+
+/**
+ * Handle Edge bookmark title/URL edits and folder renames (`onChanged`).
+ * URL nodes enqueue an upload with reason `change`. Folders with a persisted
+ * folder→collection mapping enqueue `rename-collection` (exclude / unmapped = no-op).
+ *
+ * @param {string} id
+ * @param {{ title?: string, url?: string }} [changeInfo] from chrome.bookmarks.onChanged
+ */
+export async function handleBookmarkChanged(id, changeInfo) {
+  if (!changeInfo || (changeInfo.title === undefined && changeInfo.url === undefined)) {
+    return;
+  }
+  if (await isChangeSuppressed(id)) return;
+
+  let node;
+  try {
+    node = await getNode(id);
+  } catch {
+    return;
+  }
+
+  if (node.url) {
+    await queue.enqueue(String(id), { reason: "change" });
+    await drain();
+    return;
+  }
+
+  // Folder title change → in-place Raindrop collection rename when mapped.
+  const collectionId = await getFolderCollectionId(id);
+  if (collectionId == null) return;
+
+  const config = await getConfig();
+  const overrides = await getOverrides();
+  const ancestorIds = await folderPolicyAncestorIds(id, node.parentId);
+  if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+    return;
+  }
+
+  await queue.enqueueJob({
+    id: `rc-${id}`,
+    kind: JOB.RENAME_COLLECTION,
+    folderId: String(id),
+  });
+  await drain();
+}

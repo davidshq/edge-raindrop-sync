@@ -11,7 +11,7 @@ The extension SHALL register a `chrome.bookmarks.onCreated` listener that, for e
 
 #### Scenario: User creates a bookmark
 - **WHEN** the user adds a new bookmark in Edge
-- **THEN** a sync job referencing that bookmark's GUID is appended to the durable queue
+- **THEN** a sync job referencing that bookmark's node id is appended to the durable queue
 - **AND** the drain process is signaled to run
 
 #### Scenario: A folder is created
@@ -36,17 +36,17 @@ The extension SHALL persist the sync queue, retry metadata, and in-flight progre
 - **THEN** it completes without making any Raindrop requests
 
 ### Requirement: Confirm-before-act ordering
-The engine SHALL create the Raindrop bookmark and persist the `guid → raindropId` mapping BEFORE performing any policy-driven local action. No local deletion SHALL occur unless the corresponding Raindrop write has been confirmed.
+The engine SHALL create the Raindrop bookmark and persist the `bookmarkId → raindropId` mapping BEFORE performing any policy-driven local action. No local deletion SHALL occur unless the corresponding Raindrop write has been confirmed.
 
 #### Scenario: Raindrop create succeeds
 - **WHEN** a job is drained and the Raindrop API confirms the bookmark was created
-- **THEN** the `guid → raindropId` mapping is persisted
+- **THEN** the `bookmarkId → raindropId` mapping is persisted
 - **AND** only then is the resolved policy's local action applied
 
 #### Scenario: Raindrop create fails
 - **WHEN** the Raindrop API returns an error for a job
 - **THEN** the bookmark is not removed from Edge
-- **AND** the job remains queued for retry
+- **AND** the job remains queued for retry (or is dead-lettered after the maximum attempt count)
 
 ### Requirement: Folder mirroring into nested Raindrop collections
 The engine SHALL recreate the Edge folder path of each synced bookmark as nested Raindrop collections under a user-chosen root collection, creating any missing collection (ensure-if-missing) and caching `path → collectionId` in storage. Both Edge roots SHALL be preserved under the chosen root.
@@ -65,16 +65,16 @@ The engine SHALL recreate the Edge folder path of each synced bookmark as nested
 - **THEN** they map to `Edge/Favorites bar/…` and `Edge/Other favorites/…` respectively
 
 ### Requirement: Deduplication of already-synced bookmarks
-The engine SHALL maintain a persisted `guid → raindropId` map and SHALL skip creating a Raindrop bookmark for any GUID already present in the map.
+The engine SHALL maintain a persisted `bookmarkId → raindropId` map and SHALL skip creating a Raindrop bookmark for any bookmark id already present in the map.
 
 #### Scenario: Same bookmark drained twice
-- **WHEN** a job for a GUID already present in the dedup map is drained
+- **WHEN** a job for a bookmark id already present in the pair map is drained
 - **THEN** no new Raindrop bookmark is created
 - **AND** the job is treated as already satisfied
 
 #### Scenario: Sync-and-keep bookmark on repeated heartbeat
 - **WHEN** a bookmark in a `sync-and-keep` folder remains in Edge and the heartbeat re-encounters it
-- **THEN** it is not re-uploaded because its GUID is already in the dedup map
+- **THEN** it is not re-uploaded because its bookmark id is already in the pair map
 
 ### Requirement: One-shot backfill of existing bookmarks
 The extension SHALL provide a user-triggered backfill that walks the existing bookmark tree, enqueues each URL node per its resolved policy, and drains with rate-limit backoff. Backfill progress SHALL be persisted so the sweep resumes after a worker restart rather than restarting.
@@ -206,7 +206,7 @@ The extension SHALL register a `chrome.bookmarks.onMoved` listener. When a URL b
 
 #### Scenario: User moves a bookmark to another folder
 - **WHEN** the user drags a URL bookmark from one Edge folder to another
-- **THEN** an upload job for that bookmark GUID is appended to the durable queue
+- **THEN** an upload job for that bookmark's node id is appended to the durable queue
 - **AND** the drain process is signaled to run
 
 #### Scenario: User reorders within the same folder

@@ -14,11 +14,7 @@ import {
   setRaindropFolderAllowlist,
   isRateLimited,
 } from "../lib/store.js";
-import {
-  countArchiveEntries,
-  exportArchiveEntries,
-  clearArchive,
-} from "../lib/log-archive.js";
+import { countArchiveEntries, exportArchiveEntries, clearArchive } from "../lib/log-archive.js";
 import { getTree, mirrorPathExists, getTopRoots } from "../lib/bookmarks.js";
 import {
   buildCollectionIndex,
@@ -164,6 +160,12 @@ async function testToken() {
 
 /* ---- status + log ---- */
 
+function formatBytes(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 async function refreshStatus() {
   let resp;
   try {
@@ -174,6 +176,25 @@ async function refreshStatus() {
   if (!resp?.ok) return;
 
   $("pending").textContent = resp.pending ?? 0;
+  const deadCount = resp.deadLetter ?? 0;
+  $("deadLetter").textContent = String(deadCount);
+  const dlRow = $("deadLetterRow");
+  if (deadCount > 0) dlRow.classList.remove("hidden");
+  else dlRow.classList.add("hidden");
+
+  const storage = resp.storage;
+  if (storage && typeof storage.bytesInUse === "number") {
+    const used = formatBytes(storage.bytesInUse);
+    const quota = formatBytes(storage.quotaBytes);
+    const pct =
+      storage.quotaBytes > 0
+        ? Math.min(100, Math.round((100 * storage.bytesInUse) / storage.quotaBytes))
+        : 0;
+    $("storageUsage").textContent = `${used} / ${quota} (${pct}%)`;
+  } else {
+    $("storageUsage").textContent = "—";
+  }
+
   const last = resp.status?.lastActivityAt;
   $("lastActivity").textContent = last ? new Date(last).toLocaleString() : "—";
 
@@ -187,6 +208,9 @@ async function refreshStatus() {
   const rateUntil = resp.status?.rateLimitedUntil;
   if (rateUntil && rateUntil > Date.now()) {
     banner.textContent = `Paused for Raindrop rate limits until ${new Date(rateUntil).toLocaleTimeString()}. Sync resumes automatically.`;
+    banner.classList.remove("hidden");
+  } else if (resp.status?.lastError?.startsWith("Storage write failed")) {
+    banner.textContent = resp.status.lastError;
     banner.classList.remove("hidden");
   } else if (resp.status?.deletionsHalted && resp.status?.lastError) {
     banner.textContent = `Deletions halted: ${resp.status.lastError}. Jobs are kept and will retry once resolved.`;
@@ -252,7 +276,7 @@ async function exportArchive() {
 
 async function clearArchiveConfirmed() {
   const ok = window.confirm(
-    "Clear the long-term activity archive? This cannot be undone. The recent activity list is not affected.",
+    "Clear the long-term activity archive? This cannot be undone. The recent activity list is not affected."
   );
   if (!ok) return;
   const out = $("archiveStatus");
@@ -383,9 +407,7 @@ function allRaindropOnlySelected() {
   return raindropOnlyRows.every(
     (row) =>
       !!draftAllowlist[row.id] ||
-      (index &&
-        rootId != null &&
-        isCollectionAllowed(row.id, index, rootId, draftAllowlist)),
+      (index && rootId != null && isCollectionAllowed(row.id, index, rootId, draftAllowlist))
   );
 }
 
@@ -393,8 +415,7 @@ function updatePoliciesUi(statusText) {
   const dirty = policiesDirty();
   $("savePolicies").disabled = !dirty;
   $("discardPolicies").disabled = !dirty;
-  $("selectAllRaindropOnly").disabled =
-    raindropOnlyRows.length === 0 || allRaindropOnlySelected();
+  $("selectAllRaindropOnly").disabled = raindropOnlyRows.length === 0 || allRaindropOnlySelected();
   $("clearRaindropOnly").disabled = Object.keys(draftAllowlist).length === 0;
   if (statusText !== undefined) {
     $("policiesStatus").textContent = statusText;
@@ -580,9 +601,7 @@ async function refreshRaindropOnlyList() {
       const path = relativeSegments.join(" / ");
       const col = getById(index, collectionId);
       const empty =
-        col?.count != null
-          ? Number(col.count) === 0
-          : !(getByParent(index, collectionId)?.size);
+        col?.count != null ? Number(col.count) === 0 : !getByParent(index, collectionId)?.size;
       rows.push({
         id: String(collectionId),
         path,
@@ -605,8 +624,7 @@ async function refreshRaindropOnlyList() {
         pruneNote;
     } else {
       status.textContent =
-        `None Raindrop-only — every Raindrop folder path already matches Edge.` +
-        pruneNote;
+        `None Raindrop-only — every Raindrop folder path already matches Edge.` + pruneNote;
     }
     paintRaindropOnlyList();
   } catch (err) {
@@ -654,9 +672,7 @@ function paintRaindropOnlyList() {
     title.textContent = row.title;
     const sub = document.createElement("div");
     sub.className = "sub";
-    sub.textContent = coveredByParent
-      ? `${row.path} · included via parent`
-      : row.path;
+    sub.textContent = coveredByParent ? `${row.path} · included via parent` : row.path;
     meta.append(title, sub);
 
     const badge = document.createElement("span");
@@ -693,6 +709,31 @@ $("save").addEventListener("click", saveSettings);
 $("testToken").addEventListener("click", testToken);
 $("backfill").addEventListener("click", runBackfill);
 $("reconcile").addEventListener("click", () => runReconcile());
+$("retryDeadLetter").addEventListener("click", async () => {
+  const out = $("deadLetterStatus");
+  out.textContent = "Retrying…";
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: MSG.RETRY_DEAD_LETTER });
+    out.textContent = resp?.ok
+      ? `Re-queued ${resp.retried ?? 0} job(s).`
+      : `Failed: ${resp?.error || "unknown"}`;
+  } catch (err) {
+    out.textContent = `Failed: ${err.message}`;
+  }
+  refreshStatus();
+});
+$("clearDeadLetter").addEventListener("click", async () => {
+  if (!confirm("Clear all dead-lettered jobs? They will not be retried.")) return;
+  const out = $("deadLetterStatus");
+  out.textContent = "Clearing…";
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: MSG.CLEAR_DEAD_LETTER });
+    out.textContent = resp?.ok ? "Cleared." : `Failed: ${resp?.error || "unknown"}`;
+  } catch (err) {
+    out.textContent = `Failed: ${err.message}`;
+  }
+  refreshStatus();
+});
 $("exportArchive").addEventListener("click", exportArchive);
 $("clearArchive").addEventListener("click", clearArchiveConfirmed);
 $("syncMode").addEventListener("change", () => {

@@ -174,10 +174,13 @@ console.log("== raindrop folder allowlist ==");
     byId.set(c._id, c);
     byId.set(String(c._id), c);
   }
-  byParent.set("root", new Map([
-    ["edge", root],
-    ["indie", indie],
-  ]));
+  byParent.set(
+    "root",
+    new Map([
+      ["edge", root],
+      ["indie", indie],
+    ])
+  );
   byParent.set(1, new Map([["favorites bar", bar]]));
   byParent.set(2, new Map([["work", work]]));
   byParent.set(3, new Map([["nested", nested]]));
@@ -190,7 +193,7 @@ console.log("== raindrop folder allowlist ==");
   assert.equal(
     isCollectionAllowed(21, index, 1, { 20: { path: "Indie" } }),
     true,
-    "outside-root parent covers",
+    "outside-root parent covers"
   );
   assert.deepEqual(collectionAbsolutePath(index, 21), ["Indie", "Child"]);
   assert.deepEqual(mirrorRelativeSegments(index, 21, 1), ["Raindrop", "Indie", "Child"]);
@@ -204,17 +207,17 @@ console.log("== raindrop folder allowlist ==");
   assert.deepEqual(
     raindropUploadSegments(["Other favorites", "Raindrop", "Indie", "Child"], "Edge"),
     ["Indie", "Child"],
-    "outside-root Edge path uploads to account-level collection",
+    "outside-root Edge path uploads to account-level collection"
   );
   assert.deepEqual(
     raindropUploadSegments(["Favorites bar", "Work"], "Edge"),
     ["Edge", "Favorites bar", "Work"],
-    "under-root Edge path still nests under sync root",
+    "under-root Edge path still nests under sync root"
   );
   assert.deepEqual(
     raindropUploadSegments(["Other favorites", "Raindrop"], "Edge"),
     ["Edge", "Other favorites", "Raindrop"],
-    "bare Raindrop container falls back under sync root",
+    "bare Raindrop container falls back under sync root"
   );
   const picker = collectionsForAllowlistPicker(index, 1);
   assert.ok(picker.some((p) => p.collectionId === 20 && !p.underSyncRoot));
@@ -229,7 +232,7 @@ console.log("== raindrop folder allowlist ==");
       folderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
     }),
     true,
-    "outside-root allowlisted may create",
+    "outside-root allowlisted may create"
   );
   assert.equal(
     collectionIdFromRelative(index, 1, ["Favorites bar", "Work", "Nested"]),
@@ -337,7 +340,12 @@ console.log("== outside-root forest list ids ==");
   }
   const index = { byId };
   const ids = outsideRootListIds(
-    { 10: { path: "Indie" }, 11: { path: "Indie/Child" }, 20: { path: "Other" }, 1: { path: "Edge" } },
+    {
+      10: { path: "Indie" },
+      11: { path: "Indie/Child" },
+      20: { path: "Other" },
+      1: { path: "Edge" },
+    },
     index,
     1
   );

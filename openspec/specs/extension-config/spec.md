@@ -47,11 +47,11 @@ The extension SHALL let the user choose the global default policy from `sync-and
 - **THEN** the options UI does not offer a global “delete from Edge after upload” control
 
 ### Requirement: Per-folder policy editor
-The extension SHALL present the Edge folder tree and let the user assign an explicit policy override to any folder. Edits in the editor SHALL be held as a local draft and SHALL NOT be persisted or take effect for sync until the user explicitly saves. Overrides SHALL be stored keyed by folder GUID and displayed alongside the folder's path. The editor SHALL allow discarding unsaved draft changes.
+The extension SHALL present the Edge folder tree and let the user assign an explicit policy override to any folder. Edits in the editor SHALL be held as a local draft and SHALL NOT be persisted or take effect for sync until the user explicitly saves. Overrides SHALL be stored keyed by folder node id and displayed alongside the folder's path. The editor SHALL allow discarding unsaved draft changes.
 
 #### Scenario: Assign an override
 - **WHEN** the user selects a folder in the editor and assigns it `exclude`, then saves
-- **THEN** an override keyed by that folder's GUID is persisted
+- **THEN** an override keyed by that folder's node id is persisted
 - **AND** the folder's path and chosen policy are shown in the editor
 
 #### Scenario: Draft does not apply until save
@@ -83,7 +83,7 @@ The extension SHALL provide a "Run backfill now" control that starts the one-sho
 - **THEN** the backfill sweep begins enqueuing existing bookmarks per their resolved policies
 
 ### Requirement: Sync status and log display
-The extension SHALL display sync status, including pending queue size, recent sync activity (up to 500 entries retained in local storage), and any errors such as authentication failures or rate-limit backoff. The status view SHALL offer controls for an opt-in long-term activity archive (enable with settings, export, clear) as specified by the activity-log-archive capability.
+The extension SHALL display sync status, including pending queue size, dead-lettered job count (with Retry / Clear when non-empty), approximate `chrome.storage.local` usage, recent sync activity (up to 500 entries retained in local storage), and any errors such as authentication failures, storage write failures, or rate-limit backoff. The status view SHALL offer controls for an opt-in long-term activity archive (enable with settings, export, clear) as specified by the activity-log-archive capability.
 
 #### Scenario: Pending work shown
 - **WHEN** jobs are queued and being processed
@@ -97,6 +97,11 @@ The extension SHALL display sync status, including pending queue size, recent sy
 #### Scenario: Recent activity retention
 - **WHEN** more than 500 activity lines have been recorded
 - **THEN** the recent activity list retained for the status view keeps the newest 500 entries
+
+#### Scenario: Storage usage and dead-letter controls
+- **WHEN** Status refreshes
+- **THEN** used bytes and quota are shown
+- **AND** if dead-lettered jobs exist, Retry and Clear actions are offered
 
 ### Requirement: Sync mode configuration
 The extension SHALL let the user choose sync mode from `one-way` and `bidirectional`, defaulting to `one-way`, and SHALL persist the choice in extension storage.

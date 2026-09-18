@@ -5,10 +5,7 @@
 // Both call computePullUpdatePlan so those decisions cannot diverge.
 
 import { canCreateRaindropOnlyPath } from "./allowlist.js";
-import {
-  ancestorIdsFromFolder,
-  resolveExistingMirrorParent,
-} from "./bookmarks.js";
+import { ancestorIdsFromFolder, resolveExistingMirrorParent } from "./bookmarks.js";
 import { isExcluded } from "./policy.js";
 
 /**

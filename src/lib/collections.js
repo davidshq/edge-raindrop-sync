@@ -240,8 +240,7 @@ export async function ensureCollectionPath(client, index, fullSegments, cache, p
 
     // Prefer getByParent when index has byId/byParent shape; fall back for
     // legacy callers that pass a bare byParent Map as `index`.
-    const siblings =
-      index.byParent != null ? getByParent(index, parentId) : byParent.get(parentId);
+    const siblings = index.byParent != null ? getByParent(index, parentId) : byParent.get(parentId);
     let col = siblings && siblings.get(title.toLowerCase());
     if (!col) {
       col = await client.createCollection(title, parentId === ROOT ? null : parentId);

@@ -249,8 +249,7 @@ export async function ancestorIdsFromFolder(folderId) {
  * @returns {Promise<string[]>}
  */
 export async function folderPolicyAncestorIds(folderId, parentId) {
-  const parentAncestors =
-    parentId && parentId !== "0" ? await ancestorIdsFromFolder(parentId) : [];
+  const parentAncestors = parentId && parentId !== "0" ? await ancestorIdsFromFolder(parentId) : [];
   return [String(folderId), ...parentAncestors];
 }
 
