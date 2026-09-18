@@ -103,7 +103,7 @@ The extension SHALL provide a user-triggered backfill that walks the existing bo
 
 #### Scenario: Delete-confirm GETs are capped per tick
 - **WHEN** reconcile finishes a listing pass with many paired raindrops absent from the listing
-- **THEN** at most a bounded number of `GET /raindrop/{id}` confirms run that tick
+- **THEN** at most a bounded number of `GET /raindrop/{id}` confirms run that tick (shared with tombstone-prune confirms)
 - **AND** remaining candidates are left for a later tick (no false Edge deletes)
 - **AND** a durable rotating offset ensures deferred candidates are checked on subsequent cycles
 
@@ -160,9 +160,36 @@ The engine SHALL persist bidirectional pair mappings (`bookmarkId ↔ raindropId
 - **OR** a `delete-raindrop` / `delete-edge` job for that raindrop is already queued
 - **THEN** the engine drops the pull job without creating an Edge bookmark
 
+#### Scenario: Tombstones for absent raindrops are pruned
+- **WHEN** a reconcile cycle completes
+- **AND** a tombstoned raindrop id was not seen in the listing
+- **AND** a confirm GET shows the raindrop is absent or trashed
+- **THEN** that tombstone is removed from storage
+- **AND** tombstones for raindrops still present in the listing (e.g. offload) are kept
+- **AND** those confirm GETs share the same per-tick budget as delete-detection confirms
+
 #### Scenario: Extension-authored Edge create is suppressed
 - **WHEN** reconcile creates an Edge bookmark from a raindrop
 - **THEN** the resulting `onCreated` event does not enqueue a new Raindrop upload for that bookmark
+
+#### Scenario: Raindrop field drift updates paired Edge bookmark
+- **WHEN** bidirectional mode is on and a paired raindrop's title, link, or collection differs from the Edge bookmark
+- **THEN** reconcile enqueues a `pull-update` job
+- **AND** drain applies the Edge title/URL and/or parent folder to match
+- **AND** the resulting `onChanged`/`onMoved` events do not echo an Edge→Raindrop upload
+
+#### Scenario: Pull-update placement create honors folder mode and allowlist
+- **WHEN** a paired raindrop moves to a collection whose mirrored Edge path does not fully exist
+- **AND** `existing-only` (or an active allowlist) would block creating that path for pull-create
+- **THEN** drain does not create the missing Edge folders
+- **AND** title/URL updates still apply when those fields differ
+
+#### Scenario: Raindrop collection title drift renames mapped Edge folder
+- **WHEN** bidirectional mode is on and a mapped Raindrop collection title differs from the Edge folder title
+- **THEN** reconcile enqueues a `pull-rename-folder` job
+- **AND** drain renames the Edge folder in place
+- **AND** Edge top roots and excluded folders are not renamed
+- **AND** the resulting `onChanged` does not echo an Edge→Raindrop `rename-collection`
 
 ### Requirement: Periodic reconcile trigger
 When sync mode is `bidirectional`, the engine SHALL run Raindrop reconciliation on the alarm heartbeat (and when explicitly requested) to discover new raindrops and remotely deleted raindrops under the configured root.

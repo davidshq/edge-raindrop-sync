@@ -15,6 +15,9 @@
 // Paired upload drains update link/title/collection; folder renames use
 // rename-collection jobs + folderId→collectionId map.
 //
+// Raindrop→Edge field drift: reconcile enqueues pull-update jobs; drain applies
+// title/URL/move with change-suppression so onMoved/onChanged do not echo back.
+//
 // Offload (sync-and-delete): after Edge remove, clear the pair and tombstone
 // with reason edge-offload so reconcile cannot pull the item back, without
 // leaving a zombie bookmarkId in the pair map.
@@ -40,8 +43,10 @@ import {
   hasTombstone,
   suppressRemove,
   suppressCreate,
+  suppressChange,
   consumeRemoveSuppression,
   consumeCreateSuppression,
+  isChangeSuppressed,
   setStatus,
   appendLog,
   ensurePairsMigrated,
@@ -57,7 +62,11 @@ import {
   removeFolder,
   resolveLocation,
   createBookmark,
+  updateBookmark,
+  moveBookmark,
   resolveEdgeParentForMirror,
+  resolveExistingMirrorParent,
+  getTopRoots,
   mirrorPathExists,
   ancestorIdsFromFolder,
   collectUrlDescendantIds,
@@ -253,6 +262,12 @@ async function processJob(job, ctx) {
   switch (kind) {
     case JOB.PULL_CREATE:
       await processPullCreate(job, ctx);
+      break;
+    case JOB.PULL_UPDATE:
+      await processPullUpdate(job, ctx);
+      break;
+    case JOB.PULL_RENAME_FOLDER:
+      await processPullRenameFolder(job, ctx);
       break;
     case JOB.DELETE_RAINDROP:
       await processDeleteRaindrop(job, ctx);
@@ -491,6 +506,156 @@ async function processPullCreate(job, ctx) {
   await queue.remove(job.id);
 }
 
+/**
+ * Apply Raindrop title/URL/placement onto an existing paired Edge bookmark.
+ * Suppresses onMoved/onChanged so the update does not echo Edge→Raindrop.
+ * Placement moves that would create missing Edge folders honor the same
+ * existing-only / allowlist gate as pull-create; title/URL still apply.
+ */
+async function processPullUpdate(job, ctx) {
+  const { config, overrides, getIndex } = ctx;
+  const bookmarkId = job.bookmarkId != null ? String(job.bookmarkId) : null;
+  const rid = job.raindropId != null ? String(job.raindropId) : null;
+
+  if (!bookmarkId || !rid || !job.link) {
+    await queue.remove(job.id);
+    return;
+  }
+  if (await hasTombstone(rid)) {
+    await queue.remove(job.id);
+    return;
+  }
+  // Pair must still point at this bookmark (upload race / delete).
+  if ((await getBookmarkIdForRaindrop(rid)) !== bookmarkId) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  let node;
+  try {
+    node = await getNode(bookmarkId);
+  } catch {
+    await queue.remove(job.id);
+    return;
+  }
+  if (!node?.url) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  const relative = job.relativeSegments || [];
+  if (node.parentId && node.parentId !== "0") {
+    const currentAncestors = await ancestorIdsFromFolder(node.parentId);
+    if (isExcluded(currentAncestors, overrides, config.defaultPolicy)) {
+      await queue.remove(job.id);
+      return;
+    }
+  }
+
+  const wantTitle = job.title || job.link;
+  const wantLink = job.link;
+  const titleDiff = (node.title || "") !== wantTitle;
+  const urlDiff = (node.url || "") !== wantLink;
+
+  const topRoots = await getTopRoots();
+  let targetParent = await resolveExistingMirrorParent(relative, config.rootName, topRoots);
+  if (targetParent == null) {
+    const index = await getIndex();
+    const root = findRootCollection(index, config.rootName);
+    const allowed = canCreateRaindropOnlyPath({
+      allowlist: config.raindropFolderAllowlist || {},
+      collectionId: job.collectionId,
+      index,
+      rootId: root?._id ?? null,
+      edgePathExists: false,
+      folderMode: config.raindropFolderMode || RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+    });
+    if (allowed) {
+      targetParent = await resolveEdgeParentForMirror(relative, config.rootName, topRoots);
+    }
+  }
+
+  await suppressChange(bookmarkId);
+
+  if (titleDiff || urlDiff) {
+    await updateBookmark(bookmarkId, {
+      ...(titleDiff ? { title: wantTitle } : {}),
+      ...(urlDiff ? { url: wantLink } : {}),
+    });
+  }
+
+  if (targetParent != null && String(node.parentId) !== String(targetParent)) {
+    await suppressChange(bookmarkId); // move may fire separately from update
+    await moveBookmark(bookmarkId, { parentId: targetParent });
+    await appendLog("info", `Pulled move: ${wantTitle || wantLink}`);
+  } else if (titleDiff || urlDiff) {
+    await appendLog("info", `Pulled update: ${wantTitle || wantLink}`);
+  }
+
+  await queue.remove(job.id);
+}
+
+/**
+ * Apply a Raindrop collection title onto the mapped Edge folder (in place).
+ * Skips Edge top roots (parentId "0"). Suppresses onChanged echo.
+ */
+async function processPullRenameFolder(job, ctx) {
+  const { config, overrides, cache, getIndex } = ctx;
+  const folderId = job.folderId != null ? String(job.folderId) : null;
+  const collectionId = job.collectionId;
+  const wantTitle = job.title != null ? String(job.title) : "";
+
+  if (!folderId || collectionId == null) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  let node;
+  try {
+    node = await getNode(folderId);
+  } catch {
+    await clearFolderCollection(folderId);
+    await queue.remove(job.id);
+    return;
+  }
+  if (node.url || node.parentId === "0") {
+    await queue.remove(job.id);
+    return;
+  }
+
+  const parentAncestors =
+    node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
+  const ancestorIds = [folderId, ...parentAncestors];
+  if (resolvePolicy(ancestorIds, overrides, config.defaultPolicy) === POLICY.EXCLUDE) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  // Mapping must still point at this collection.
+  const mapped = await getFolderCollectionId(folderId);
+  if (mapped == null || String(mapped) !== String(collectionId)) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  if ((node.title || "") === wantTitle) {
+    await queue.remove(job.id);
+    return;
+  }
+
+  await suppressChange(folderId);
+  await updateBookmark(folderId, { title: wantTitle });
+  await rewriteCollectionCacheForRename(collectionId, wantTitle);
+  const fresh = await getCollectionCache();
+  for (const key of Object.keys(cache)) delete cache[key];
+  Object.assign(cache, fresh);
+  const index = await getIndex();
+  applyCollectionTitleInIndex(index, collectionId, wantTitle);
+
+  await appendLog("info", `Pulled folder rename: ${wantTitle}`);
+  await queue.remove(job.id);
+}
+
 /** True if a delete-raindrop or delete-edge job for this raindrop is still queued. */
 async function hasPendingDeleteForRaindrop(rid) {
   const target = String(rid);
@@ -674,6 +839,8 @@ export async function handleBookmarkCreated(id, node) {
  * @param {{ parentId?: string, oldParentId?: string }} [moveInfo] from chrome.bookmarks.onMoved
  */
 export async function handleBookmarkMoved(id, moveInfo) {
+  if (await isChangeSuppressed(id)) return;
+
   const oldParent =
     moveInfo?.oldParentId != null && moveInfo.oldParentId !== ""
       ? String(moveInfo.oldParentId)
@@ -694,7 +861,15 @@ export async function handleBookmarkMoved(id, moveInfo) {
   const ids = node.url ? [String(id)] : await collectUrlDescendantIds(id);
   if (!ids.length) return;
 
-  await queue.enqueueMany(ids, { reason: "move" });
+  // Folder fan-out: skip children that are themselves change-suppressed.
+  const toEnqueue = [];
+  for (const bid of ids) {
+    if (await isChangeSuppressed(bid)) continue;
+    toEnqueue.push(bid);
+  }
+  if (!toEnqueue.length) return;
+
+  await queue.enqueueMany(toEnqueue, { reason: "move" });
   await drain();
 }
 
@@ -713,6 +888,7 @@ export async function handleBookmarkChanged(id, changeInfo) {
   ) {
     return;
   }
+  if (await isChangeSuppressed(id)) return;
 
   let node;
   try {

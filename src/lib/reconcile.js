@@ -1,27 +1,45 @@
 // Raindrop ↔ Edge reconciliation for bidirectional mode.
 //
 // Lists raindrops under the configured root (nested), enqueues pull-creates for
-// unmapped items, and enqueues Edge deletes when a mapped raindrop disappears.
+// unmapped items, pull-updates when a paired raindrop's title/URL/placement
+// drifts from Edge, pull-rename-folder when a mapped collection title drifts
+// from the Edge folder, and enqueues Edge deletes when a mapped raindrop
+// disappears.
 // Skips Raindrop file/document uploads. Honors tombstones, exclude, folder mode,
 // and raindropFolderAllowlist (non-empty ⇒ selective Raindrop-only sync).
 // Root-nested and outside-root allowlist listing share maybeEnqueuePullCreate so
 // pull filters cannot drift between the two paths.
 //
+// After a completed cycle, tombstones for raindrops confirmed absent (GET) are
+// pruned using leftover confirm budget after delete-detection — living offload
+// targets stay (still listed).
+//
 // Rate-limit posture: shared page budget for root + outside-root listing; capped
-// GET /raindrop confirms during delete detection; stop early when the client
-// reports low X-RateLimit-Remaining (throws RateLimitError for sync to gate).
+// GET /raindrop confirms shared by delete detection + tombstone prune; stop early
+// when the client reports low X-RateLimit-Remaining (throws RateLimitError).
 //
 // Mid-cycle exits share checkpointOutsidePending / finishReconcileCycle so
 // durable reconcile-state fields cannot drift between the resume and root→outside
 // completion paths. List pagination finish uses isListPageDone (shared by root
 // and outside-root loops).
 
-import { JOB, SYNC_MODE, RAINDROP_FOLDER_MODE, MAX_RECONCILE_PAGES_PER_TICK, MAX_ALIVE_CHECKS_PER_TICK, MIN_RECONCILE_INTERVAL_MS } from "./constants.js";
+import {
+  JOB,
+  SYNC_MODE,
+  RAINDROP_FOLDER_MODE,
+  MAX_RECONCILE_PAGES_PER_TICK,
+  MAX_ALIVE_CHECKS_PER_TICK,
+  MIN_RECONCILE_INTERVAL_MS,
+} from "./constants.js";
 import {
   getConfig,
   getOverrides,
   getPairs,
   hasTombstone,
+  getTombstones,
+  pruneTombstones,
+  getFolderCollections,
+  clearFolderCollection,
   getReconcileState,
   setReconcileState,
   setRaindropFolderAllowlist,
@@ -33,9 +51,12 @@ import * as queue from "./queue.js";
 import { isExcluded } from "./policy.js";
 import {
   getTopRoots,
+  getNode,
   ancestorIdsForMirrorPath,
+  ancestorIdsFromFolder,
   mirrorPathExists,
   ensureMirrorFolderPath,
+  resolveExistingMirrorParent,
 } from "./bookmarks.js";
 import {
   buildCollectionIndex,
@@ -423,7 +444,8 @@ async function finishReconcileCycle({
   enqueued,
   pages,
 }) {
-  await finishDeleteDetection(client, seenIds, pairs);
+  await finishConfirmGets(client, seenIds, pairs);
+  await finishFolderRenamePull(index, config, overrides);
   await ensureAllowlistedOrMirrorAll(
     index,
     rootId,
@@ -447,16 +469,26 @@ async function finishReconcileCycle({
   return { enqueued, pages, done: true };
 }
 
-async function finishDeleteDetection(client, seenIds, pairs) {
+/**
+ * Shared GET budget for delete-confirm then tombstone prune (at most
+ * MAX_ALIVE_CHECKS_PER_TICK total). Remaining budget after deletes goes to prune.
+ */
+async function finishConfirmGets(client, seenIds, pairs) {
+  let remaining = MAX_ALIVE_CHECKS_PER_TICK;
+  remaining = await finishDeleteDetection(client, seenIds, pairs, remaining);
+  await finishTombstonePrune(client, seenIds, remaining);
+}
+
+async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
   const state = await getReconcileState();
-  const acc = new Set(state.seenAcc || []);
-  for (const id of seenIds) acc.add(id);
+  const acc = new Set((state.seenAcc || []).map(String));
+  for (const id of seenIds) acc.add(String(id));
 
   // Build the full candidate list first, then walk a rotating window so pairs
-  // past MAX_ALIVE_CHECKS_PER_TICK are not starved across cycles.
+  // past the per-tick budget are not starved across cycles.
   const candidates = [];
   for (const [rid, bookmarkId] of Object.entries(pairs.byRaindrop)) {
-    if (acc.has(rid)) continue;
+    if (acc.has(String(rid))) continue;
     if (await hasTombstone(rid)) continue;
     candidates.push([rid, bookmarkId]);
   }
@@ -465,11 +497,13 @@ async function finishDeleteDetection(client, seenIds, pairs) {
     if ((state.aliveConfirmOffset || 0) !== 0) {
       await setReconcileState({ aliveConfirmOffset: 0 });
     }
-    return;
+    return maxGets;
   }
 
+  if (maxGets <= 0) return 0;
+
   const offset = (state.aliveConfirmOffset || 0) % candidates.length;
-  const toCheck = Math.min(MAX_ALIVE_CHECKS_PER_TICK, candidates.length);
+  const toCheck = Math.min(maxGets, candidates.length);
   let deleteJobs = 0;
 
   for (let n = 0; n < toCheck; n++) {
@@ -503,6 +537,98 @@ async function finishDeleteDetection(client, seenIds, pairs) {
       `Reconcile deferred ${deferred} delete-confirm GET(s) to stay under rate limits (will rotate next cycle).`
     );
   }
+  return maxGets - toCheck;
+}
+
+/**
+ * Drop tombstones for raindrops confirmed gone (not in this cycle's listing and
+ * GET says absent/trash). Living offload targets remain listed → kept.
+ * Uses leftover confirm budget after delete-detection.
+ * @returns {Promise<number>} unused GET budget
+ */
+async function finishTombstonePrune(client, seenIds, maxGets) {
+  const state = await getReconcileState();
+  const acc = new Set((state.seenAcc || []).map(String));
+  for (const id of seenIds) acc.add(String(id));
+
+  const stones = await getTombstones();
+  const candidates = Object.keys(stones).filter((rid) => !acc.has(rid));
+  if (!candidates.length) {
+    if ((state.tombstonePruneOffset || 0) !== 0) {
+      await setReconcileState({ tombstonePruneOffset: 0 });
+    }
+    return maxGets;
+  }
+
+  if (maxGets <= 0) return 0;
+
+  const offset = (state.tombstonePruneOffset || 0) % candidates.length;
+  const toCheck = Math.min(maxGets, candidates.length);
+  const absent = [];
+
+  for (let n = 0; n < toCheck; n++) {
+    const rid = candidates[(offset + n) % candidates.length];
+    if (!(await raindropStillAlive(client, rid))) absent.push(rid);
+    client.throwIfShouldPause();
+  }
+
+  await setReconcileState({
+    tombstonePruneOffset: (offset + toCheck) % candidates.length,
+  });
+
+  if (absent.length) {
+    await pruneTombstones(absent);
+    await appendLog("info", `Pruned ${absent.length} stale tombstone(s).`);
+  }
+  return maxGets - toCheck;
+}
+
+/**
+ * Raindrop collection title → Edge folder title for mapped folders.
+ * Uses the live collection index (no extra API). Skips Edge top roots and exclude.
+ */
+async function finishFolderRenamePull(index, config, overrides) {
+  const map = await getFolderCollections();
+  let enqueued = 0;
+
+  for (const [folderId, collectionId] of Object.entries(map)) {
+    const col = getById(index, collectionId);
+    if (!col) {
+      // Collection gone from Raindrop — drop stale mapping (titles handled elsewhere).
+      await clearFolderCollection(folderId);
+      continue;
+    }
+
+    let node;
+    try {
+      node = await getNode(folderId);
+    } catch {
+      await clearFolderCollection(folderId);
+      continue;
+    }
+    if (node.url || node.parentId === "0") continue;
+
+    const wantTitle = col.title || "";
+    if ((node.title || "") === wantTitle) continue;
+
+    const parentAncestors =
+      node.parentId && node.parentId !== "0" ? await ancestorIdsFromFolder(node.parentId) : [];
+    const ancestorIds = [String(folderId), ...parentAncestors];
+    if (isExcluded(ancestorIds, overrides, config.defaultPolicy)) continue;
+
+    const added = await queue.enqueueJob({
+      id: `ref-${folderId}`,
+      kind: JOB.PULL_RENAME_FOLDER,
+      folderId: String(folderId),
+      collectionId: String(collectionId),
+      title: wantTitle,
+    });
+    if (added) enqueued++;
+  }
+
+  if (enqueued > 0) {
+    await appendLog("info", `Reconcile queued ${enqueued} Edge folder rename(s) from Raindrop.`);
+  }
 }
 
 /**
@@ -528,7 +654,8 @@ async function raindropStillAlive(client, rid) {
 /**
  * Shared pull gate for root-nested and outside-root listing paths.
  * Always records `item._id` on `ctx.seenIds` (delete-detection), then applies
- * tombstone / pair / link / type / exclude / allowlist filters before enqueue.
+ * tombstone / pair / link / type / exclude / allowlist filters.
+ * Unpaired → PULL_CREATE; paired with title/URL/placement drift → PULL_UPDATE.
  *
  * @param {object} item Raindrop API raindrop
  * @param {{
@@ -545,14 +672,13 @@ async function raindropStillAlive(client, rid) {
  * @param {(colId: number|string|undefined) => string[]|null|undefined} resolveRelative
  *   Relative Edge mirror segments; `null`/`undefined` skips (unknown / not under root).
  *   An empty array is valid (bookmark living directly under the sync root).
- * @returns {Promise<0|1>} 1 when a new PULL_CREATE job was enqueued
+ * @returns {Promise<0|1>} 1 when a new pull job was enqueued
  */
 async function maybeEnqueuePullCreate(item, ctx, resolveRelative) {
   const rid = String(item._id);
   ctx.seenIds.add(rid);
 
   if (await hasTombstone(rid)) return 0;
-  if (ctx.pairs.byRaindrop[rid]) return 0;
   if (!item.link) return 0;
   if (item.type === "file" || item.type === "document") return 0;
 
@@ -571,6 +697,11 @@ async function maybeEnqueuePullCreate(item, ctx, resolveRelative) {
     )
   ) {
     return 0;
+  }
+
+  const bookmarkId = ctx.pairs.byRaindrop[rid];
+  if (bookmarkId) {
+    return maybeEnqueuePullUpdate(item, ctx, relative, bookmarkId, colId);
   }
 
   const edgeExists = await mirrorPathExists(relative, ctx.config.rootName, ctx.topRoots);
@@ -593,6 +724,70 @@ async function maybeEnqueuePullCreate(item, ctx, resolveRelative) {
     raindropId: rid,
     link: item.link,
     title: item.title || item.link,
+    relativeSegments: relative,
+    collectionId: colId != null ? String(colId) : null,
+  });
+  return added ? 1 : 0;
+}
+
+/**
+ * Enqueue Raindrop→Edge field/placement update when the paired Edge bookmark drifted.
+ * Missing destination folders are gated like pull-create (`existing-only` / allowlist);
+ * title/URL drift can still enqueue when placement create is blocked.
+ * @returns {Promise<0|1>}
+ */
+async function maybeEnqueuePullUpdate(item, ctx, relative, bookmarkId, colId) {
+  let node;
+  try {
+    node = await getNode(bookmarkId);
+  } catch {
+    return 0;
+  }
+  if (!node?.url) return 0;
+
+  const wantTitle = item.title || item.link || "";
+  const wantLink = item.link || "";
+  const titleDiff = (node.title || "") !== wantTitle;
+  const urlDiff = (node.url || "") !== wantLink;
+
+  const existingParent = await resolveExistingMirrorParent(
+    relative,
+    ctx.config.rootName,
+    ctx.topRoots
+  );
+  let parentDiff =
+    existingParent == null || String(node.parentId) !== String(existingParent);
+
+  // Would need to create Edge folders for the Raindrop placement — same gate as pull-create.
+  if (existingParent == null && parentDiff) {
+    const allowed = canCreateRaindropOnlyPath({
+      allowlist: ctx.allowlist,
+      collectionId: colId,
+      index: ctx.index,
+      rootId: ctx.rootId,
+      edgePathExists: false,
+      folderMode: ctx.folderMode,
+    });
+    if (!allowed) parentDiff = false;
+  }
+
+  if (!titleDiff && !urlDiff && !parentDiff) return 0;
+
+  // Current Edge location under exclude → hands-off (destination already gated).
+  if (node.parentId && node.parentId !== "0") {
+    const currentAncestors = await ancestorIdsFromFolder(node.parentId);
+    if (isExcluded(currentAncestors, ctx.overrides, ctx.config.defaultPolicy)) {
+      return 0;
+    }
+  }
+
+  const added = await queue.enqueueJob({
+    id: `pu-${String(item._id)}`,
+    kind: JOB.PULL_UPDATE,
+    raindropId: String(item._id),
+    bookmarkId: String(bookmarkId),
+    link: wantLink,
+    title: wantTitle,
     relativeSegments: relative,
     collectionId: colId != null ? String(colId) : null,
   });

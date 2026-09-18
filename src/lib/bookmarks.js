@@ -49,6 +49,23 @@ export async function createFolder({ parentId, title }) {
   return chrome.bookmarks.create({ parentId, title });
 }
 
+/** Update Edge-owned fields on an existing bookmark (title and/or url). */
+export async function updateBookmark(id, { title, url } = {}) {
+  const patch = {};
+  if (title !== undefined) patch.title = title;
+  if (url !== undefined) patch.url = url;
+  if (Object.keys(patch).length === 0) return getNode(id);
+  return chrome.bookmarks.update(id, patch);
+}
+
+/** Move a bookmark or folder to a new parent (index optional). */
+export async function moveBookmark(id, { parentId, index } = {}) {
+  const destination = {};
+  if (parentId !== undefined) destination.parentId = parentId;
+  if (index !== undefined) destination.index = index;
+  return chrome.bookmarks.move(id, destination);
+}
+
 /** Top-level user-visible roots under the invisible absolute root (id "0"). */
 export async function getTopRoots() {
   return getChildren("0");
@@ -154,6 +171,16 @@ export async function mirrorPathExists(relativeSegments, rootName, topRoots) {
   const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName, topRoots);
   const { complete } = await walkFolderTitles(startId, titles, { onMissing: "stop" });
   return complete;
+}
+
+/**
+ * Existing Edge parent id for a Raindrop mirror path, or null if any folder is missing.
+ * Does not create folders — used to detect placement drift for pull-update.
+ */
+export async function resolveExistingMirrorParent(relativeSegments, rootName, topRoots) {
+  const { startId, titles } = await resolveMirrorPlacement(relativeSegments, rootName, topRoots);
+  const { parentId, complete } = await walkFolderTitles(startId, titles, { onMissing: "stop" });
+  return complete ? parentId : null;
 }
 
 /**

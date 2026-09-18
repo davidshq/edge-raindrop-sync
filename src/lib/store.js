@@ -232,7 +232,12 @@ export async function pruneTombstones(absentRaindropIds) {
 /* ---- suppressions for extension-authored create/remove ---- */
 
 async function getSuppress() {
-  return read(KEY.SUPPRESS, { removes: {}, creates: {} });
+  const raw = await read(KEY.SUPPRESS, { removes: {}, creates: {}, changes: {} });
+  return {
+    removes: raw.removes || {},
+    creates: raw.creates || {},
+    changes: raw.changes || {},
+  };
 }
 
 async function writeSuppress(suppress) {
@@ -245,7 +250,7 @@ function sweepExpired(map, now) {
   }
 }
 
-/** Record a suppression expiry under `bucket` (`removes` | `creates`). */
+/** Record a suppression expiry under `bucket` (`removes` | `creates` | `changes`). */
 async function suppressKey(bucket, key) {
   return withLock(async () => {
     const suppress = await getSuppress();
@@ -294,6 +299,28 @@ export async function consumeCreateSuppression(url) {
   return consumeKey("creates", url);
 }
 
+/** Suppress onMoved/onChanged echo when reconcile applies a Raindrop→Edge update. */
+export async function suppressChange(bookmarkId) {
+  if (!bookmarkId) return;
+  return suppressKey("changes", String(bookmarkId));
+}
+
+/**
+ * True while a change suppression window is active (does not consume).
+ * onChanged and onMoved may both fire for one pull-update; both must stay quiet.
+ */
+export async function isChangeSuppressed(bookmarkId) {
+  if (!bookmarkId) return false;
+  return withLock(async () => {
+    const suppress = await getSuppress();
+    const now = Date.now();
+    sweepExpired(suppress.changes, now);
+    const expiresAt = suppress.changes[String(bookmarkId)];
+    await writeSuppress(suppress);
+    return expiresAt != null && expiresAt > now;
+  });
+}
+
 /* ---- reconcile progress ---- */
 
 export async function getReconcileState() {
@@ -304,6 +331,8 @@ export async function getReconcileState() {
     lastError: null,
     /** Rotating index into delete-confirm candidates (survives completed cycles). */
     aliveConfirmOffset: 0,
+    /** Rotating index into tombstone-prune candidates (survives completed cycles). */
+    tombstonePruneOffset: 0,
   });
 }
 

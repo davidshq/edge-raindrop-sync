@@ -39,6 +39,10 @@ export const ALL_RAINDROP_FOLDER_MODES = [
 export const JOB = {
   UPLOAD: "upload",
   PULL_CREATE: "pull-create",
+  /** Raindrop→Edge title/URL/placement update for an existing pair. */
+  PULL_UPDATE: "pull-update",
+  /** Raindrop→Edge in-place folder title rename (mapped collection). */
+  PULL_RENAME_FOLDER: "pull-rename-folder",
   DELETE_RAINDROP: "delete-raindrop",
   DELETE_EDGE: "delete-edge",
   /** Edge folder title → Raindrop collection rename (one-way and bidirectional). */
@@ -62,8 +66,8 @@ export const KEY = {
   DEDUP: "dedup", // legacy { [bookmarkId]: raindropId } — read once into PAIRS, not dual-written
   PAIRS: "pairs", // { byBookmark: { [bookmarkId]: raindropId }, byRaindrop: { [raindropId]: bookmarkId } }
   TOMBSTONES: "tombstones", // { [raindropId]: { at, reason } }
-  SUPPRESS: "suppress", // { removes: { [bookmarkId]: expiresAt }, creates: { [url]: expiresAt } }
-  RECONCILE: "reconcile", // { cursorPage, outsideCursor, running, lastRunAt, lastError, seenAcc, aliveConfirmOffset }
+  SUPPRESS: "suppress", // { removes, creates, changes: { [bookmarkId]: expiresAt } }
+  RECONCILE: "reconcile", // { cursorPage, outsideCursor, running, lastRunAt, lastError, seenAcc, aliveConfirmOffset, tombstonePruneOffset }
   COLLECTION_CACHE: "collectionCache", // { [collectionPath]: collectionId }
   /** Edge folder id → Raindrop collection id (for in-place folder renames). */
   FOLDER_COLLECTIONS: "folderCollections", // { [folderId]: collectionId }
@@ -111,8 +115,9 @@ export const RATE_LIMIT_RESERVE = 8;
 /** Cap queue drains per tick so a large backlog cannot burn the whole minute budget. */
 export const MAX_JOBS_PER_DRAIN = 20;
 /**
- * Cap GET /raindrop/{id} delete-confirm checks per reconcile finish.
- * Unchecked pairs are left alone until a later tick (fail-soft: no false deletes).
+ * Cap GET /raindrop/{id} confirms per reconcile finish, shared by
+ * delete-detection and tombstone prune (delete-confirm runs first; prune
+ * uses whatever budget remains). Unchecked work rotates next cycle.
  */
 export const MAX_ALIVE_CHECKS_PER_TICK = 8;
 /** Cap Raindrop list pages (root + outside-root) per reconcile tick. */

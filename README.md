@@ -19,11 +19,15 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   Folder moves fan out to every URL bookmark under that tree. Editing a bookmark
   **title or URL** updates those Edge-owned fields on the paired raindrop.
   Renaming an Edge folder renames the mirrored Raindrop collection **in place**
-  (same collection id) once that folder has been synced. Recent activity logs
-  `Moved: … → …`, `Updated: …`, or `Renamed folder: …` as appropriate (creates
-  still log `Synced: …`). Moving into an **Exclude** folder skips the Raindrop
-  write (any existing Raindrop copy is left where it was). Changes made inside
-  the Raindrop UI (moves, renames, title edits) are not yet pushed back to Edge.
+  (same collection id) once that folder has been synced. In bidirectional mode,
+  reconcile also applies the reverse for **bookmarks and folders**: Raindrop
+  title/URL/collection changes update Edge bookmarks, and renaming a collection
+  in Raindrop renames the mapped Edge folder (Edge top roots like Favorites bar
+  are never renamed). Recent activity logs
+  `Moved: … → …`, `Updated: …`, `Pulled update: …`, `Pulled move: …`,
+  `Pulled folder rename: …`, or `Renamed folder: …` as appropriate (creates
+  still log `Synced: …` / `Pulled: …`). Moving into an **Exclude** folder skips
+  the Raindrop write (any existing Raindrop copy is left where it was).
 - **Folder mirroring** — your Edge folder tree is recreated as nested Raindrop
   collections under a root collection you name (default `Edge`), preserving both
   Edge roots (`Favorites bar`, `Other favorites`). Path→id cache hits are checked
@@ -177,5 +181,4 @@ scripts/
   does not offer offload as the bidirectional *global* default — that mode
   keeps both sides by default. Stale stored `sync-and-delete` under
   bidirectional is coerced to keep-both on read/save so the engine matches the UI.
-- **Out of scope for now:** Raindrop→Edge placement/title/folder-rename
-  propagation, OAuth, and publishing to the Edge Add-ons store.
+- **Out of scope for now:** OAuth, and publishing to the Edge Add-ons store.

@@ -119,6 +119,20 @@ globalThis.chrome = {
       }
       bookmarks.delete(String(id));
     },
+    async update(id, patch) {
+      const n = bookmarks.get(String(id));
+      if (!n) throw new Error("Bookmark not found");
+      if (patch.title !== undefined) n.title = patch.title;
+      if (patch.url !== undefined) n.url = patch.url;
+      return { ...n };
+    },
+    async move(id, destination) {
+      const n = bookmarks.get(String(id));
+      if (!n) throw new Error("Bookmark not found");
+      if (destination.parentId !== undefined) n.parentId = String(destination.parentId);
+      if (destination.index !== undefined) n.index = destination.index;
+      return { ...n };
+    },
   },
   alarms: { create() {}, onAlarm: { addListener() {} } },
   runtime: {
@@ -1806,6 +1820,167 @@ async function scenario70_onChangedAndFolderRename() {
   );
 }
 
+async function scenario71_tombstonePruneAndPullUpdate() {
+  console.log("\n== 6.11 Tombstone prune + Raindrop→Edge pull-update/folder rename ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE, JOB } = eng.constants;
+  await resetAll(eng.store);
+  const mock = makeMockRaindrop();
+  patchClient(eng.raindropMod, mock);
+
+  const rootName = "ERS-Verify-PrunePull";
+  await eng.store.setConfig({
+    token: "mock",
+    rootName,
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+  });
+
+  const root = await mock.createCollection(rootName, null);
+  const bar = await mock.createCollection("Favorites bar", root._id);
+  const folder = await mock.createCollection("ERS-Prune-Folder", bar._id);
+
+  // --- Tombstone prune: gone raindrop drops tombstone; living offload keeps it ---
+  const gone = mock._seedRich(folder._id, {
+    link: "https://example.com/ers-tombstone-gone",
+    title: "gone",
+  });
+  await eng.store.addTombstone(String(gone._id), "edge-user-delete");
+  await mock.deleteRaindrop(gone._id);
+
+  const liveOffload = mock._seedRich(folder._id, {
+    link: "https://example.com/ers-tombstone-offload",
+    title: "offload-keep",
+  });
+  await eng.store.addTombstone(String(liveOffload._id), "edge-offload");
+
+  await eng.reconcile.reconcile({ force: true });
+  assert.equal(
+    await eng.store.hasTombstone(String(gone._id)),
+    false,
+    "absent raindrop tombstone pruned"
+  );
+  assert.equal(
+    await eng.store.hasTombstone(String(liveOffload._id)),
+    true,
+    "living offload tombstone kept"
+  );
+
+  // --- Pull-update: Raindrop title/URL/collection change updates Edge ---
+  const remote = mock._seedRich(folder._id, {
+    link: "https://example.com/ers-pull-update",
+    title: "original title",
+  });
+  await eng.reconcile.reconcile({ force: true });
+  await eng.sync.drain();
+  const edge = findEdgeByUrl("https://example.com/ers-pull-update");
+  assert.ok(edge, "pulled for update test");
+  assert.equal(edge.title, "original title");
+
+  const otherFolder = await mock.createCollection("ERS-Prune-Other", bar._id);
+  const item = mock._raindrops.get(remote._id);
+  item.title = "renamed in raindrop";
+  item.link = "https://example.com/ers-pull-update-v2";
+  item.collection = { $id: otherFolder._id };
+
+  await eng.reconcile.reconcile({ force: true });
+  const jobs = await eng.queue.list();
+  assert.ok(
+    jobs.some((j) => eng.queue.jobKind(j) === JOB.PULL_UPDATE && String(j.raindropId) === String(remote._id)),
+    "pull-update enqueued"
+  );
+  await eng.sync.drain();
+
+  const updated = findEdgeByUrl("https://example.com/ers-pull-update-v2");
+  assert.ok(updated, "Edge URL updated from Raindrop");
+  assert.equal(updated.title, "renamed in raindrop");
+  assert.equal(updated.id, edge.id, "same bookmark id");
+  const parent = await chrome.bookmarks.get(updated.parentId);
+  assert.equal(parent[0].title, "ERS-Prune-Other", "Edge parent follows Raindrop collection");
+
+  // Change suppression: synthetic onChanged must not re-upload
+  const beforeSize = mock._raindrops.size;
+  await eng.sync.handleBookmarkChanged(updated.id, {
+    title: "renamed in raindrop",
+    url: "https://example.com/ers-pull-update-v2",
+  });
+  await eng.sync.drain();
+  assert.equal(mock._raindrops.size, beforeSize, "suppressed change does not create duplicate");
+
+  // --- existing-only: Raindrop move to missing path → title OK, no folder create ---
+  const { RAINDROP_FOLDER_MODE } = eng.constants;
+  await eng.store.setConfig({
+    ...(await eng.store.getConfig()),
+    raindropFolderMode: RAINDROP_FOLDER_MODE.EXISTING_ONLY,
+  });
+  const missingDest = await mock.createCollection("ERS-Missing-Dest", bar._id);
+  const movedItem = mock._raindrops.get(remote._id);
+  movedItem.title = "title while move blocked";
+  movedItem.collection = { $id: missingDest._id };
+  await eng.reconcile.reconcile({ force: true });
+  await eng.sync.drain();
+  const stayed = findEdgeByUrl("https://example.com/ers-pull-update-v2");
+  assert.ok(stayed, "bookmark still present");
+  assert.equal(stayed.title, "title while move blocked", "title updated under existing-only");
+  assert.equal(
+    (await chrome.bookmarks.get(stayed.parentId))[0].title,
+    "ERS-Prune-Other",
+    "parent unchanged when dest folders missing"
+  );
+  assert.equal(
+    [...bookmarks.values()].some((n) => !n.url && n.title === "ERS-Missing-Dest"),
+    false,
+    "existing-only did not create missing dest folder on pull-update"
+  );
+  // Restore create-as-needed for later folder-rename steps
+  await eng.store.setConfig({
+    ...(await eng.store.getConfig()),
+    raindropFolderMode: RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED,
+  });
+
+  // --- Raindrop collection rename → Edge folder title ---
+  const edgeFolder = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS-Folder-Old",
+  });
+  const folderBm = await chrome.bookmarks.create({
+    parentId: edgeFolder.id,
+    title: "folder-rename-probe",
+    url: "https://example.com/ers-folder-rename-probe",
+  });
+  await eng.queue.enqueue(folderBm.id);
+  await eng.sync.drain();
+  const colId = await eng.store.getFolderCollectionId(edgeFolder.id);
+  assert.ok(colId != null, "folder→collection mapped on upload");
+  const col = mock._collections.get(Number(colId)) || mock._collections.get(colId);
+  assert.ok(col, "raindrop collection exists");
+  col.title = "ERS-Folder-New";
+
+  await eng.reconcile.reconcile({ force: true });
+  const renameJobs = await eng.queue.list();
+  assert.ok(
+    renameJobs.some(
+      (j) =>
+        eng.queue.jobKind(j) === JOB.PULL_RENAME_FOLDER && String(j.folderId) === String(edgeFolder.id)
+    ),
+    "pull-rename-folder enqueued"
+  );
+  await eng.sync.drain();
+  const renamedFolder = (await chrome.bookmarks.get(edgeFolder.id))[0];
+  assert.equal(renamedFolder.title, "ERS-Folder-New", "Edge folder title follows Raindrop");
+
+  // Folder onChanged suppress should not enqueue Edge→Raindrop rename
+  await eng.sync.handleBookmarkChanged(edgeFolder.id, { title: "ERS-Folder-New" });
+  await eng.sync.drain();
+  assert.equal(
+    (await eng.queue.list()).some((j) => eng.queue.jobKind(j) === JOB.RENAME_COLLECTION),
+    false,
+    "suppressed folder change does not enqueue rename-collection"
+  );
+
+  console.log("  ✔ tombstone prune; Raindrop→Edge title/URL/move/folder rename; change suppress");
+}
+
 async function optionalLiveSmoke() {
   if (!USE_LIVE) {
     console.log("\n== Live Raindrop smoke skipped (pass --live with token for API check) ==");
@@ -1869,6 +2044,7 @@ async function main() {
   await scenario68_rateLimitBudget();
   await scenario69_bookmarkMoves();
   await scenario70_onChangedAndFolderRename();
+  await scenario71_tombstonePruneAndPullUpdate();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

@@ -28,6 +28,18 @@ When sync mode is `bidirectional`, the system SHALL periodically reconcile raind
 - **AND** a `bookmarkId ↔ raindropId` pair is persisted
 - **AND** the create does not enqueue a duplicate Edge→Raindrop upload
 
+#### Scenario: Paired raindrop title URL or collection changes
+- **WHEN** bidirectional mode is on and a paired raindrop's title, link, or collection placement differs from the Edge bookmark
+- **THEN** Edge is updated to match (same bookmark id)
+- **AND** `onChanged`/`onMoved` from that update do not enqueue an Edge→Raindrop echo
+
+#### Scenario: Mapped Raindrop collection rename updates Edge folder title
+- **WHEN** bidirectional mode is on and a Raindrop collection mapped to an Edge folder has a different title than that folder
+- **AND** the Edge folder is not a top root (parent is not absolute root `0`)
+- **AND** the folder is not under an effective `exclude` policy
+- **THEN** the Edge folder title is updated in place to match
+- **AND** the resulting `onChanged` does not enqueue an Edge→Raindrop collection rename
+
 #### Scenario: File uploads are not pulled into Edge
 - **WHEN** a raindrop under the root has `type` of `file` or `document`
 - **THEN** reconcile does not create an Edge bookmark for it
