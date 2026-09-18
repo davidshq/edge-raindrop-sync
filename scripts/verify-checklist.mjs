@@ -1894,6 +1894,54 @@ async function scenario72_deadLetterAndStorage() {
   console.log("  ✔ dead-letter after max attempts; retry/clear; storage usage");
 }
 
+async function scenario73_coalesceActivityLog() {
+  console.log("\n== 7.3 Consecutive activity-log coalesce ==");
+  const eng = await importEngine();
+  const { LOG_ATS_LIMIT } = eng.constants;
+  assert.equal(LOG_ATS_LIMIT, 100);
+  await resetAll(eng.store);
+
+  const msg = "Allowlist ensured 414 Edge folder path(s).";
+  await eng.store.appendLog("info", msg, 1_000);
+  let log = await eng.store.getLog();
+  assert.equal(log.length, 1);
+  assert.equal(log[0].ats, undefined, "first occurrence has no ats");
+
+  await eng.store.appendLog("info", msg, 2_000);
+  await eng.store.appendLog("info", msg, 3_000);
+  log = await eng.store.getLog();
+  assert.equal(log.length, 1, "consecutive identical lines stay one row");
+  assert.equal(log[0].at, 3_000);
+  assert.deepEqual(log[0].ats, [1_000, 2_000, 3_000]);
+
+  await eng.store.appendLog("error", msg, 4_000);
+  log = await eng.store.getLog();
+  assert.equal(log.length, 2, "different level does not coalesce");
+
+  await eng.store.appendLog("info", "Synced: Example", 5_000);
+  await eng.store.appendLog("info", msg, 6_000);
+  log = await eng.store.getLog();
+  assert.equal(log.length, 4, "different message starts a new row");
+  assert.equal(log[0].message, msg);
+  assert.equal(log[0].at, 6_000);
+  assert.equal(log[0].ats, undefined);
+  assert.deepEqual(log[3].ats, [1_000, 2_000, 3_000]);
+
+  await resetAll(eng.store);
+  const repeats = LOG_ATS_LIMIT + 5;
+  for (let i = 0; i < repeats; i++) {
+    await eng.store.appendLog("info", "same", i);
+  }
+  log = await eng.store.getLog();
+  assert.equal(log.length, 1);
+  assert.equal(log[0].ats.length, LOG_ATS_LIMIT);
+  assert.equal(log[0].at, repeats - 1);
+  assert.equal(log[0].ats[0], repeats - LOG_ATS_LIMIT);
+  assert.equal(log[0].ats[LOG_ATS_LIMIT - 1], repeats - 1);
+
+  console.log("  ✔ consecutive identical lines coalesce; cap drops oldest times");
+}
+
 async function optionalLiveSmoke() {
   if (!USE_LIVE) {
     console.log("\n== Live Raindrop smoke skipped (pass --live with token for API check) ==");
@@ -1959,6 +2007,7 @@ async function main() {
   await scenario70_onChangedAndFolderRename();
   await scenario71_tombstonePruneAndPullUpdate();
   await scenario72_deadLetterAndStorage();
+  await scenario73_coalesceActivityLog();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

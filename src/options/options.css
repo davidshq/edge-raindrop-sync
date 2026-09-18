@@ -199,6 +199,11 @@ button:active:not(:disabled) {
   color: var(--muted);
   white-space: nowrap;
 }
+.log .repeat {
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
 .log .lvl-error {
   color: var(--warn-ink);
 }

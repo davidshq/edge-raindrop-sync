@@ -75,10 +75,12 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   drains the queue; full bidirectional reconcile cools down for 15 minutes after
   a completed cycle (manual **Reconcile now** always runs).
 - **Activity log** — Options → Status shows the newest **500** lines from
-  `chrome.storage.local`. Enable **Keep long-term activity log** (Save settings)
-  to also append into an IndexedDB archive (soft-capped at 50 000). Export or
-  clear the archive from Status; turning the setting off stops new writes but
-  does not wipe existing archive data.
+  `chrome.storage.local`. Consecutive identical lines collapse into one row
+  (latest time, a `×N` count, and up to 100 occurrence times kept on the entry).
+  A different line starts a new row. Enable **Keep long-term activity log**
+  (Save settings) to also store that same entry in an IndexedDB archive
+  (soft-capped at 50 000). Export or clear the archive from Status; turning the
+  setting off stops new writes but does not wipe existing archive data.
 
 ## Setup
 

@@ -230,6 +230,14 @@ async function refreshStatus() {
     msg.className = `lvl-${entry.level}`;
     msg.textContent = entry.message;
     li.append(ts, msg);
+    const repeats = Array.isArray(entry.ats) ? entry.ats.length : 0;
+    if (repeats > 1) {
+      const n = document.createElement("span");
+      n.className = "repeat";
+      n.textContent = `×${repeats}`;
+      n.title = `Repeated ${repeats} times`;
+      li.append(n);
+    }
     log.append(li);
   }
 

@@ -16,6 +16,7 @@ import {
   KEY,
   DEFAULT_CONFIG,
   LOG_LIMIT,
+  LOG_ATS_LIMIT,
   SUPPRESS_MS,
   POLICY,
   SYNC_MODE,
@@ -545,11 +546,35 @@ export async function getLog() {
   return read(KEY.LOG, []);
 }
 
+/**
+ * Rewrite `head` when it is the same level and message; otherwise null.
+ * `ats` is oldest-first and includes the latest time. A first occurrence
+ * has no `ats` (caller inserts `{ at, level, message }` as-is).
+ * @param {{ at?: number, level?: string, message?: string, ats?: number[] }|undefined} head
+ * @param {string} level
+ * @param {string} message
+ * @param {number} at
+ * @returns {{ at: number, level: string, message: string, ats: number[] }|null}
+ */
+export function coalesceLogHead(head, level, message, at) {
+  if (!head || head.level !== level || head.message !== message) return null;
+  const prev = Array.isArray(head.ats) && head.ats.length > 0 ? head.ats : [head.at];
+  const ats = [...prev, at].slice(-LOG_ATS_LIMIT);
+  return { at, level, message, ats };
+}
+
 export async function appendLog(level, message, at) {
-  const entry = { at: at ?? Date.now(), level, message };
+  const now = at ?? Date.now();
+  let entry = { at: now, level, message };
   try {
     const log = await getLog();
-    log.unshift(entry);
+    const coalesced = coalesceLogHead(log[0], level, message, now);
+    if (coalesced) {
+      log[0] = coalesced;
+      entry = coalesced;
+    } else {
+      log.unshift(entry);
+    }
     await write(KEY.LOG, log.slice(0, LOG_LIMIT));
   } catch (err) {
     console.error("[ers] appendLog storage failed:", err);

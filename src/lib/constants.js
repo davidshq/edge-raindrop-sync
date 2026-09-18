@@ -141,3 +141,8 @@ export const SUPPRESS_MS = 15_000;
 export const LOG_LIMIT = 500;
 /** Soft cap for opt-in IndexedDB long-term archive (oldest pruned first). */
 export const LOG_ARCHIVE_LIMIT = 50_000;
+/**
+ * Max occurrence times kept on one coalesced activity row (`ats`).
+ * Oldest times are dropped. Consecutive identical lines share one row.
+ */
+export const LOG_ATS_LIMIT = 100;

@@ -2,7 +2,9 @@
 //
 // Recent activity stays in chrome.storage.local (LOG_LIMIT). When the user
 // enables keepLongTermLog, appendLog also writes here so history survives
-// past the recent ring buffer. Export/clear run from the options page.
+// past the recent ring buffer. Consecutive identical lines update the newest
+// row in place (same shape as the recent log, including ats). Export/clear
+// run from the options page.
 // Failures must not break sync — callers catch and continue.
 
 import { LOG_ARCHIVE_LIMIT } from "./constants.js";
@@ -58,31 +60,57 @@ function reqToPromise(req) {
 }
 
 /**
- * Append one activity line and prune oldest entries if over LOG_ARCHIVE_LIMIT.
- * @param {{ at: number, level: string, message: string }} entry
+ * Fields stored for one archive row. `id` is set only when updating in place.
+ * @param {{ at: number, level: string, message: string, ats?: number[] }} entry
+ * @param {number} [id]
+ */
+function toArchiveRecord(entry, id) {
+  const record = {
+    at: entry.at,
+    level: entry.level,
+    message: entry.message,
+  };
+  if (Array.isArray(entry.ats) && entry.ats.length > 0) record.ats = entry.ats.slice();
+  if (id != null) record.id = id;
+  return record;
+}
+
+/**
+ * Store one activity line. If the newest row matches level and message, update
+ * it (consecutive coalesce). Otherwise append, then prune oldest entries over
+ * LOG_ARCHIVE_LIMIT.
+ *
+ * Cursor and follow-up requests stay inside the transaction callback so the
+ * transaction does not auto-commit across an await.
+ * @param {{ at: number, level: string, message: string, ats?: number[] }} entry
  */
 export async function appendArchiveEntry(entry) {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
-    store.add({
-      at: entry.at,
-      level: entry.level,
-      message: entry.message,
-    });
-    const countReq = store.count();
-    countReq.onsuccess = () => {
-      const excess = countReq.result - LOG_ARCHIVE_LIMIT;
-      if (excess <= 0) return;
-      let deleted = 0;
-      const cursorReq = store.openCursor();
-      cursorReq.onsuccess = () => {
-        const cursor = cursorReq.result;
-        if (!cursor || deleted >= excess) return;
-        cursor.delete();
-        deleted += 1;
-        cursor.continue();
+    const cursorReq = store.openCursor(null, "prev");
+    cursorReq.onsuccess = () => {
+      const newest = cursorReq.result?.value;
+      const same = newest && newest.level === entry.level && newest.message === entry.message;
+      if (same) {
+        store.put(toArchiveRecord(entry, newest.id));
+        return;
+      }
+      store.add(toArchiveRecord(entry));
+      const countReq = store.count();
+      countReq.onsuccess = () => {
+        const excess = countReq.result - LOG_ARCHIVE_LIMIT;
+        if (excess <= 0) return;
+        let deleted = 0;
+        const pruneReq = store.openCursor();
+        pruneReq.onsuccess = () => {
+          const cursor = pruneReq.result;
+          if (!cursor || deleted >= excess) return;
+          cursor.delete();
+          deleted += 1;
+          cursor.continue();
+        };
       };
     };
     await waitTx(tx);
@@ -106,16 +134,20 @@ export async function countArchiveEntries() {
 
 /**
  * All archive rows for JSON export (id omitted).
- * @returns {Promise<Array<{ at: number, level: string, message: string }>>}
+ * @returns {Promise<Array<{ at: number, level: string, message: string, ats?: number[] }>>}
  */
 export async function exportArchiveEntries() {
   const db = await openDb();
   try {
     const tx = db.transaction(STORE, "readonly");
-    /** @type {Array<{ at: number, level: string, message: string, id?: number }>} */
+    /** @type {Array<{ at: number, level: string, message: string, ats?: number[], id?: number }>} */
     const all = await reqToPromise(tx.objectStore(STORE).getAll());
     await waitTx(tx);
-    return all.map(({ at, level, message }) => ({ at, level, message }));
+    return all.map(({ at, level, message, ats }) => {
+      const row = { at, level, message };
+      if (Array.isArray(ats) && ats.length > 0) row.ats = ats;
+      return row;
+    });
   } finally {
     db.close();
   }

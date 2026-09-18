@@ -1,10 +1,4 @@
-# activity-log-archive Specification
-
-## Purpose
-
-Opt-in long-term activity log retention in IndexedDB, with export/clear controls and a soft cap, isolated from the recent chrome.storage activity list used by the status view.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Opt-in long-term activity archive
 The extension SHALL support an opt-in long-term activity archive stored in IndexedDB, defaulting to disabled. When enabled and saved, each activity log entry produced by the recent-log write SHALL also be stored in the archive, including `ats` when present. When the newest archive row has the same level and message, the extension SHALL update that row instead of inserting another. When disabled, new entries SHALL NOT be written to the archive; existing archive data SHALL remain until the user clears it.
@@ -29,26 +23,3 @@ The extension SHALL allow the user to export the long-term activity archive as a
 #### Scenario: Export archive
 - **WHEN** the user clicks Export on the long-term activity controls
 - **THEN** a JSON file download is produced containing the archived entries (`at`, `level`, `message`, and `ats` when that entry was coalesced)
-
-### Requirement: Clear long-term activity log
-The extension SHALL allow the user to clear the long-term activity archive after an explicit confirmation in the options UI.
-
-#### Scenario: Clear archive
-- **WHEN** the user confirms Clear on the long-term activity controls
-- **THEN** all IndexedDB archive entries are removed
-- **AND** the recent `chrome.storage.local` activity list is left unchanged
-
-### Requirement: Archive soft cap
-The long-term archive SHALL enforce a maximum entry count; when exceeded, the oldest entries SHALL be removed so the archive stays within the limit.
-
-#### Scenario: Cap enforced
-- **WHEN** archive size would exceed the configured maximum after an append
-- **THEN** oldest entries are deleted until the archive is within the limit
-
-### Requirement: Archive failure isolation
-Failures writing to or reading the long-term archive SHALL NOT prevent recent-log updates or sync engine progress.
-
-#### Scenario: IndexedDB unavailable
-- **WHEN** an IndexedDB append fails
-- **THEN** the recent activity log is still updated
-- **AND** sync continues
