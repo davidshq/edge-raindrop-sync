@@ -13,8 +13,98 @@
         one-way mode also asks what to do with the Edge copy after upload.
       </p>
 
-      <section>
-        <h2>Settings</h2>
+      <nav class="tabs" role="tablist" aria-label="Options">
+        <button
+          type="button"
+          role="tab"
+          id="tab-status"
+          aria-controls="panel-status"
+          aria-selected="true"
+          data-tab="status"
+        >
+          Status
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-settings"
+          aria-controls="panel-settings"
+          aria-selected="false"
+          data-tab="settings"
+          tabindex="-1"
+        >
+          Settings
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-sync"
+          aria-controls="panel-sync"
+          aria-selected="false"
+          data-tab="sync"
+          tabindex="-1"
+        >
+          Sync
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="tab-folders"
+          aria-controls="panel-folders"
+          aria-selected="false"
+          data-tab="folders"
+          tabindex="-1"
+        >
+          Folder policies
+        </button>
+      </nav>
+
+      <!-- Status: queue health, storage, recent activity, archive -->
+      <section
+        id="panel-status"
+        class="tab-panel"
+        role="tabpanel"
+        aria-labelledby="tab-status"
+        data-panel="status"
+      >
+        <h2 class="visually-hidden">Status</h2>
+        <div id="haltBanner" class="banner hidden"></div>
+        <p class="status-line">
+          Pending in queue: <strong id="pending">0</strong> · Dead-lettered:
+          <strong id="deadLetter">0</strong> · Last activity:
+          <span id="lastActivity">—</span>
+        </p>
+        <p class="status-line muted">Local storage: <span id="storageUsage">—</span></p>
+        <div id="deadLetterRow" class="row hidden">
+          <button id="retryDeadLetter" type="button" class="secondary">Retry dead-lettered</button>
+          <button id="clearDeadLetter" type="button" class="secondary">Clear dead-lettered</button>
+          <span id="deadLetterStatus" class="hint"></span>
+        </div>
+        <h3>Recent activity</h3>
+        <p class="hint">Newest 500 lines in local storage (older recent lines drop off).</p>
+        <ul id="log" class="log"></ul>
+        <h3>Long-term archive</h3>
+        <p class="hint">
+          Archived entries: <strong id="archiveCount">0</strong>
+          <span id="archiveHint" class="muted"></span>
+        </p>
+        <div class="row">
+          <button id="exportArchive" type="button" class="secondary">Export archive</button>
+          <button id="clearArchive" type="button" class="secondary">Clear archive</button>
+          <span id="archiveStatus" class="hint"></span>
+        </div>
+      </section>
+
+      <!-- Settings: credentials, sync mode, defaults -->
+      <section
+        id="panel-settings"
+        class="tab-panel hidden"
+        role="tabpanel"
+        aria-labelledby="tab-settings"
+        data-panel="settings"
+        hidden
+      >
+        <h2 class="visually-hidden">Settings</h2>
         <label>
           Raindrop test token
           <input id="token" type="password" autocomplete="off" placeholder="paste token" />
@@ -44,7 +134,8 @@
         <p id="bidirectionalWarn" class="banner warn hidden">
           Deleting a bookmark in Edge or Raindrop removes the paired item in the other system. To
           offload a specific folder (upload then remove from Edge only), set that folder’s policy to
-          <strong>Offload (delete from Edge)</strong> below — that cleanup does not delete Raindrop.
+          <strong>Offload (delete from Edge)</strong> under Folder policies — that cleanup does not
+          delete Raindrop.
         </p>
 
         <div id="oneWayPolicyBlock">
@@ -89,7 +180,7 @@
           </label>
           <p id="folderModeHelpExisting" class="field-help hint">
             Pull bookmarks only into folder paths that already exist in Edge, unless you opt in
-            Raindrop-only collections under Folder policies below. Unchecked Raindrop-only paths are
+            Raindrop-only collections under Folder policies. Unchecked Raindrop-only paths are
             skipped (no catch-all).
           </p>
           <p id="folderModeHelpCreate" class="field-help hint hidden">
@@ -123,18 +214,19 @@
         </div>
       </section>
 
-      <section>
-        <h2>Status</h2>
-        <div id="haltBanner" class="banner hidden"></div>
-        <p class="status-line">
-          Pending in queue: <strong id="pending">0</strong> · Dead-lettered:
-          <strong id="deadLetter">0</strong> · Last activity:
-          <span id="lastActivity">—</span>
-        </p>
-        <p class="status-line muted">Local storage: <span id="storageUsage">—</span></p>
+      <!-- Sync: manual Import (Edge → Raindrop) and Pull (Raindrop → Edge) -->
+      <section
+        id="panel-sync"
+        class="tab-panel hidden"
+        role="tabpanel"
+        aria-labelledby="tab-sync"
+        data-panel="sync"
+        hidden
+      >
+        <h2 class="visually-hidden">Sync</h2>
         <div class="manual-actions">
           <div class="manual-action">
-            <p class="action-title">Import existing Edge bookmarks</p>
+            <p class="action-title">Sync to Raindrop</p>
             <p class="hint action-help">
               One-time. Uploads bookmarks already in Edge that are not synced yet, and skips
               folders set to Exclude. Does not pull from Raindrop.
@@ -160,28 +252,18 @@
             </div>
           </div>
         </div>
-        <div id="deadLetterRow" class="row hidden">
-          <button id="retryDeadLetter" type="button" class="secondary">Retry dead-lettered</button>
-          <button id="clearDeadLetter" type="button" class="secondary">Clear dead-lettered</button>
-          <span id="deadLetterStatus" class="hint"></span>
-        </div>
-        <h3>Recent activity</h3>
-        <p class="hint">Newest 500 lines in local storage (older recent lines drop off).</p>
-        <ul id="log" class="log"></ul>
-        <h3>Long-term archive</h3>
-        <p class="hint">
-          Archived entries: <strong id="archiveCount">0</strong>
-          <span id="archiveHint" class="muted"></span>
-        </p>
-        <div class="row">
-          <button id="exportArchive" type="button" class="secondary">Export archive</button>
-          <button id="clearArchive" type="button" class="secondary">Clear archive</button>
-          <span id="archiveStatus" class="hint"></span>
-        </div>
       </section>
 
-      <section>
-        <h2>Folder policies</h2>
+      <!-- Folder policies: Edge tree overrides + Raindrop-only allowlist -->
+      <section
+        id="panel-folders"
+        class="tab-panel hidden"
+        role="tabpanel"
+        aria-labelledby="tab-folders"
+        data-panel="folders"
+        hidden
+      >
+        <h2 class="visually-hidden">Folder policies</h2>
         <p class="hint">
           Override the default for a folder and everything beneath it (nearest folder wins).
           Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Overrides

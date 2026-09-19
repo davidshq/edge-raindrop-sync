@@ -74,11 +74,11 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   GETs so a large library cannot stampede the API. The 1-minute heartbeat still
   drains the queue; full bidirectional reconcile cools down for 15 minutes after
   a completed cycle (manual **Pull now** always runs).
-- **Activity log** — Options → Status shows the newest **500** lines from
+- **Activity log** — Options → **Status** shows the newest **500** lines from
   `chrome.storage.local`. Consecutive identical lines collapse into one row
   (latest time, a `×N` count, and up to 100 occurrence times kept on the entry).
   A different line starts a new row. Enable **Keep long-term activity log**
-  (Save settings) to also store that same entry in an IndexedDB archive
+  (Settings → Save) to also store that same entry in an IndexedDB archive
   (soft-capped at 50 000). Export or clear the archive from Status; turning the
   setting off stops new writes but does not wipe existing archive data.
 
@@ -94,17 +94,20 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    - Go to `edge://extensions`
    - Enable **Developer mode**
    - **Load unpacked** → select the `src/` folder
-4. Open the extension's **Options**, paste your token, click **Test**, set the
+4. Open the extension's **Options**. Tabs: **Status** · **Settings** · **Sync** ·
+   **Folder policies**. On Settings, paste your token, click **Test**, set the
    root collection name / sync mode / default policy, then **Save settings**.
    In bidirectional mode, set **Raindrop → Edge folders** if you want Edge to
    stay folder-source-of-truth (`existing-only`) or to mirror empty Raindrop
    collections (`mirror-all`). Folder policy overrides and the Raindrop-only
-   allowlist are edited as a draft — use **Save folder policies** when you want
-   them to take effect (including child folders via inheritance).
-5. (Optional) Click **Import to Raindrop** to upload existing Edge bookmarks.
-   This does not pull anything from Raindrop.
-6. (Bidirectional) Click **Pull now** (or wait about 15 minutes for the heartbeat)
-   to bring Raindrop items into Edge. This does not upload Edge bookmarks.
+   allowlist are edited as a draft under Folder policies — use **Save folder
+   policies** when you want them to take effect (including child folders via
+   inheritance).
+5. (Optional) On the **Sync** tab, click **Import to Raindrop** to upload existing
+   Edge bookmarks. This does not pull anything from Raindrop.
+6. (Bidirectional) On **Sync**, click **Pull now** (or wait about 15 minutes for
+   the heartbeat) to bring Raindrop items into Edge. This does not upload Edge
+   bookmarks.
 
 ## Tests
 
@@ -189,7 +192,7 @@ src/
     reconcile-finish.js    delete-detect, tombstone prune, folder-rename pull
     pull-update.js         shared Raindrop→Edge drift plan
     backfill.js            one-shot existing-bookmark sweep
-  options/                 settings, sync mode, folder policies, status + log
+  options/                 tabbed UI: Status, Settings, Sync, Folder policies
   popup/                   compact status + quick actions
 scripts/
   verify-bidirectional-logic.mjs  pure helper checks (imports src/lib)

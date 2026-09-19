@@ -53,12 +53,68 @@ h3 {
   margin: 0 0 24px;
 }
 
-section {
+/* Top tabs: one panel visible at a time */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 16px;
+  padding: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.tabs [role="tab"] {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tabs [role="tab"]:hover {
+  color: var(--ink);
+  background: var(--bg);
+}
+
+.tabs [role="tab"][aria-selected="true"] {
+  color: #fff;
+  background: var(--accent);
+}
+
+.tabs [role="tab"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.tab-panel {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 20px;
   margin-bottom: 20px;
+}
+
+.tab-panel.hidden,
+.tab-panel[hidden] {
+  display: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 label {

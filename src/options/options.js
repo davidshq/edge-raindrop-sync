@@ -3,6 +3,7 @@
 // for backfill, reconcile, and status so work continues after the page closes.
 // Folder-policy edits are held in a draft until "Save folder policies" so a
 // parent change cannot surprise-apply to children mid-edit.
+// Top tabs (Status / Settings / Sync / Folder policies) show one panel at a time.
 
 import { ALL_POLICIES, MSG, POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE } from "../lib/constants.js";
 import {
@@ -27,6 +28,71 @@ import { isCollectionAllowed, pruneAllowlist } from "../lib/allowlist.js";
 import { RaindropClient, RateLimitError } from "../lib/raindrop.js";
 
 const $ = (id) => document.getElementById(id);
+
+const TAB_IDS = ["status", "settings", "sync", "folders"];
+
+/**
+ * Show one options tab panel and update tablist ARIA/keyboard state.
+ * @param {string} tabId One of TAB_IDS
+ */
+function showTab(tabId) {
+  const id = TAB_IDS.includes(tabId) ? tabId : "status";
+  for (const t of TAB_IDS) {
+    const tab = document.querySelector(`.tabs [data-tab="${t}"]`);
+    const panel = document.querySelector(`[data-panel="${t}"]`);
+    const on = t === id;
+    if (tab) {
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      tab.tabIndex = on ? 0 : -1;
+    }
+    if (panel) {
+      panel.classList.toggle("hidden", !on);
+      panel.hidden = !on;
+    }
+  }
+  try {
+    const url = new URL(location.href);
+    url.hash = id === "status" ? "" : id;
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+  } catch {
+    /* ignore */
+  }
+}
+
+function initTabs() {
+  const tablist = document.querySelector(".tabs");
+  if (!tablist) return;
+
+  tablist.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-tab]");
+    if (!tab || !tablist.contains(tab)) return;
+    showTab(tab.dataset.tab);
+  });
+
+  tablist.addEventListener("keydown", (event) => {
+    const tabs = [...tablist.querySelectorAll("[data-tab]")];
+    const current = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true");
+    if (current < 0) return;
+    let next;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      next = (current - 1 + tabs.length) % tabs.length;
+    } else if (event.key === "Home") {
+      next = 0;
+    } else if (event.key === "End") {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    showTab(tabs[next].dataset.tab);
+  });
+
+  const hash = (location.hash || "").replace(/^#/, "");
+  showTab(TAB_IDS.includes(hash) ? hash : "status");
+}
 
 // Folder-policy labels. "Offload" is sync-and-delete: useful as a per-folder
 // exception under bidirectional, not as the bidirectional global default.
@@ -252,7 +318,7 @@ async function refreshArchiveMeta() {
     countEl.textContent = String(count);
     hint.textContent = config.keepLongTermLog
       ? " · recording new lines"
-      : " · not recording (enable in Settings and Save)";
+      : " · not recording (enable under Settings and Save)";
   } catch {
     countEl.textContent = "—";
     hint.textContent = " · archive unavailable";
@@ -772,6 +838,7 @@ window.addEventListener("beforeunload", (event) => {
   event.preventDefault();
 });
 
+initTabs();
 loadSettings();
 renderTree();
 refreshStatus();
