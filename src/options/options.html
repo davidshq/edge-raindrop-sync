@@ -237,9 +237,7 @@
               Uploads bookmarks already in Edge that are not synced yet, and skips folders set to
               Exclude. Run anytime. Does not pull from Raindrop.
             </p>
-            <p class="status-line muted">
-              Last push: <span id="lastPush">—</span>
-            </p>
+            <p class="status-line muted">Last push: <span id="lastPush">—</span></p>
             <div class="row">
               <button id="backfill" type="button">Import to Raindrop</button>
               <span id="importStatus" class="hint" role="status"></span>
@@ -248,9 +246,9 @@
           <div id="pullAction" class="manual-action hidden">
             <p class="action-title">Pull from Raindrop</p>
             <p class="hint action-help">
-              Brings new and changed Raindrop bookmarks into Edge, and removes Edge bookmarks
-              whose Raindrop copy is gone. Also runs about every 15 minutes. Does not upload
-              your existing Edge bookmarks.
+              Brings new and changed Raindrop bookmarks into Edge, and removes Edge bookmarks whose
+              Raindrop copy is gone. Also runs about every 15 minutes. Does not upload your existing
+              Edge bookmarks.
             </p>
             <p id="reconcileLine" class="status-line muted">
               Last pull: <span id="lastReconcile">—</span>
@@ -275,11 +273,11 @@
         <h2 class="visually-hidden">Folder policies</h2>
         <p class="hint">
           Override the default for a folder and everything beneath it (nearest folder wins).
-          Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Nested
-          folders start collapsed (Favorites bar / Other favorites stay open). Use Expand all /
-          Collapse all or the filter to find deeper folders. Overrides survive renames. Edits stay
-          local until you apply (sticky bar below). Raindrop-only collections are opted in via the
-          section at the bottom (bidirectional only)—not in this Edge tree.
+          Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Nested folders
+          start collapsed (Favorites bar / Other favorites stay open). Use Expand all / Collapse all
+          or the filter to find deeper folders. Overrides survive renames. Edits stay local until
+          you apply (sticky bar below). Raindrop-only collections are opted in via the section at
+          the bottom (bidirectional only)—not in this Edge tree.
         </p>
         <div class="tree-toolbar">
           <input

@@ -136,10 +136,7 @@ function updateSyncModeUi(mode) {
   $("oneWayPolicyBlock").classList.toggle("hidden", bi);
   $("bidirectionalPolicyBlock").classList.toggle("hidden", !bi);
   $("pullAction").classList.toggle("hidden", !bi);
-  $("syncMode").setAttribute(
-    "aria-describedby",
-    bi ? "bidirectionalModeHelp" : "oneWayModeHelp",
-  );
+  $("syncMode").setAttribute("aria-describedby", bi ? "bidirectionalModeHelp" : "oneWayModeHelp");
 
   if (bi) {
     $("defaultPolicy").value = POLICY.SYNC_KEEP;
@@ -438,8 +435,7 @@ async function runReconcile(pendingMsg) {
         break;
       }
       if (passes >= maxPasses) {
-        out.textContent =
-          `Pull paused after ${passes} passes (${totalQueued} queued) — click Pull now again to continue.`;
+        out.textContent = `Pull paused after ${passes} passes (${totalQueued} queued) — click Pull now again to continue.`;
         break;
       }
       out.textContent =

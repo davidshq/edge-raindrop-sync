@@ -116,7 +116,10 @@ async function reconcileOnce({ force }) {
   client.throwIfShouldPause();
   const root = findRootCollection(index, config.rootName);
   if (!root) {
-    await appendLog("info", `Pull skipped: Raindrop collection "${config.rootName}" not found yet.`);
+    await appendLog(
+      "info",
+      `Pull skipped: Raindrop collection "${config.rootName}" not found yet.`
+    );
     await setReconcileState({
       running: false,
       lastRunAt: Date.now(),
@@ -386,7 +389,10 @@ async function checkpointOutsidePending({ seenIds, outsideCursor, enqueued, page
     lastRunAt: Date.now(),
   });
   if (enqueued > 0) {
-    await appendLog("info", `Pull queued ${enqueued} Raindrop change(s); outside-root pages pending.`);
+    await appendLog(
+      "info",
+      `Pull queued ${enqueued} Raindrop change(s); outside-root pages pending.`
+    );
   }
   return { enqueued, pages, done: false };
 }

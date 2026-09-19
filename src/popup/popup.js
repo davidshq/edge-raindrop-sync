@@ -68,8 +68,7 @@ $("reconcile").addEventListener("click", async () => {
         out.textContent = "A pull is already running — try again shortly.";
       }
     } else if (!resp.done) {
-      out.textContent =
-        `Scanning… queued ${resp.enqueued ?? 0}. Open Settings to run the pull to completion.`;
+      out.textContent = `Scanning… queued ${resp.enqueued ?? 0}. Open Settings to run the pull to completion.`;
     } else {
       out.textContent =
         (resp.enqueued ?? 0) > 0

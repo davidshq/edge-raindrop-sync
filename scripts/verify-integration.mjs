@@ -206,11 +206,7 @@ async function scenarioPullCreate(eng, client, rootId) {
   const edge = findEdgeByUrl("https://example.com/ers-integration-pull");
   assert.ok(edge, "bookmark pulled into mock Edge");
   assert.equal(edge.title, "Pulled from Raindrop");
-  assert.equal(
-    await store.getBookmarkIdForRaindrop(String(created._id)),
-    edge.id,
-    "pair recorded"
-  );
+  assert.equal(await store.getBookmarkIdForRaindrop(String(created._id)), edge.id, "pair recorded");
 
   const parent = (await chrome.bookmarks.get(edge.parentId))[0];
   assert.equal(parent.title, "Integration-Pull");
@@ -336,7 +332,11 @@ async function scenarioEdgeFolderRename(eng, client, rootId) {
 
   const rid = await store.getRaindropId(bm.id);
   const item = await getRaindropInRoot(client, rootId, rid);
-  assert.equal(Number(item.collection?.$id), Number(colId), "bookmark stayed on renamed collection");
+  assert.equal(
+    Number(item.collection?.$id),
+    Number(colId),
+    "bookmark stayed on renamed collection"
+  );
   console.log("  ✔ Edge folder rename updated live Raindrop collection");
 }
 
@@ -443,7 +443,9 @@ async function main() {
 
   let rootId;
   try {
-    ({ rootId } = await gateClient(client, () => ensureTestRoot(client), { label: "ensureTestRoot" }));
+    ({ rootId } = await gateClient(client, () => ensureTestRoot(client), {
+      label: "ensureTestRoot",
+    }));
     console.log(`Using Raindrop test root _id=${rootId}`);
 
     await scenarioCreateUpload(eng, client, rootId);
@@ -483,7 +485,9 @@ async function main() {
   } finally {
     if (rootId != null) {
       await gateClient(client, () => cleanupTestRoot(client, rootId), { label: "final cleanup" });
-      await gateClient(client, () => verifyTestRootEmpty(client, rootId), { label: "verifyTestRootEmpty" });
+      await gateClient(client, () => verifyTestRootEmpty(client, rootId), {
+        label: "verifyTestRootEmpty",
+      });
       console.log("\n  ✔ final Raindrop cleanup — test root empty");
     }
   }

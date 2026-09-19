@@ -25,12 +25,7 @@ export const MAX_RATE_RETRIES = 3;
  * @param {number|string} raindropId
  * @param {number} [maxWaitMs]
  */
-export async function waitUntilRaindropListed(
-  client,
-  collectionId,
-  raindropId,
-  maxWaitMs = 15000
-) {
+export async function waitUntilRaindropListed(client, collectionId, raindropId, maxWaitMs = 15000) {
   const want = String(raindropId);
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
@@ -42,7 +37,9 @@ export async function waitUntilRaindropListed(
     if (items.some((i) => String(i._id) === want)) return;
     await sleep(LIST_SETTLE_MS);
   }
-  throw new Error(`raindrop ${raindropId} not visible in collection ${collectionId} within ${maxWaitMs}ms`);
+  throw new Error(
+    `raindrop ${raindropId} not visible in collection ${collectionId} within ${maxWaitMs}ms`
+  );
 }
 
 /** @type {{ all: object[], byId: Map<number|string, object> } | null} */
@@ -80,7 +77,9 @@ export async function gateClient(
     } catch (err) {
       if (!(err instanceof RateLimitError) || attempt === maxAttempts) throw err;
       const wait = Math.max(1000, (err.retryAt ?? Date.now() + 5000) - Date.now() + 500);
-      console.warn(`  ⏳ ${label}: 429, waiting ${Math.ceil(wait / 1000)}s (${attempt}/${maxAttempts})`);
+      console.warn(
+        `  ⏳ ${label}: 429, waiting ${Math.ceil(wait / 1000)}s (${attempt}/${maxAttempts})`
+      );
       await sleep(wait);
     }
   }
@@ -215,7 +214,9 @@ export async function ensureTestRoot(client) {
   const roots = await gateClient(client, () => client.getRootCollections(), {
     label: "getRootCollections",
   });
-  const matches = roots.filter((c) => (c.title || "").toLowerCase() === TEST_ROOT_NAME.toLowerCase());
+  const matches = roots.filter(
+    (c) => (c.title || "").toLowerCase() === TEST_ROOT_NAME.toLowerCase()
+  );
 
   if (matches.length > 1) {
     throw new Error(
@@ -292,15 +293,19 @@ export async function assertCollectionUnderTestRoot(client, rootId, collectionId
  * @param {number|string} id
  */
 export async function raindropAlive(client, id) {
-  return gateClient(client, async () => {
-    try {
-      const item = await client.getRaindrop(id);
-      return !item.removed;
-    } catch (err) {
-      if (isNotFoundError(err)) return false;
-      throw err;
-    }
-  }, { label: `getRaindrop ${id}` });
+  return gateClient(
+    client,
+    async () => {
+      try {
+        const item = await client.getRaindrop(id);
+        return !item.removed;
+      } catch (err) {
+        if (isNotFoundError(err)) return false;
+        throw err;
+      }
+    },
+    { label: `getRaindrop ${id}` }
+  );
 }
 
 /**
@@ -317,8 +322,7 @@ export async function ensureCollectionPathUnderRoot(client, rootId, segmentTitle
     const existing = all.find(
       (c) =>
         (c.title || "") === title &&
-        (Number(c.parent?.$id) === Number(parentId) ||
-          String(c.parent?.$id) === String(parentId))
+        (Number(c.parent?.$id) === Number(parentId) || String(c.parent?.$id) === String(parentId))
     );
     if (existing) {
       leaf = existing;
@@ -344,11 +348,9 @@ export async function putRaindropRichFields(client, raindropId, { tags, note }) 
   const body = {};
   if (tags != null) body.tags = tags;
   if (note != null) body.note = note;
-  await gateClient(
-    client,
-    () => client.request("PUT", `/raindrop/${raindropId}`, body),
-    { label: `putRaindropRichFields ${raindropId}` }
-  );
+  await gateClient(client, () => client.request("PUT", `/raindrop/${raindropId}`, body), {
+    label: `putRaindropRichFields ${raindropId}`,
+  });
 }
 
 export function pauseBetweenScenarios() {
