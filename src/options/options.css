@@ -32,6 +32,11 @@ main {
   padding: 32px 24px 64px;
 }
 
+/* Folder policies: room so sticky draft bar does not cover the last list rows */
+#panel-folders {
+  padding-bottom: 12px;
+}
+
 h1 {
   font-size: 22px;
   margin: 0 0 4px;
@@ -494,4 +499,56 @@ button:active:not(:disabled) {
   color: #92400e;
   background: #fffbeb;
   border-color: #fcd34d;
+}
+
+/* Sticky draft workspace: Apply/Discard stay reachable while scrolling the tree */
+.draft-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 20px -4px 0;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #0f1724;
+  color: #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 36, 0.18);
+}
+.draft-bar.is-dirty {
+  box-shadow:
+    0 8px 24px rgba(15, 23, 36, 0.22),
+    0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+.draft-status {
+  font-size: 13px;
+  font-weight: 500;
+  color: #94a3b8;
+}
+.draft-bar.is-dirty .draft-status {
+  color: #e2e8f0;
+}
+.draft-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.draft-bar button {
+  margin-top: 0;
+}
+.draft-bar button.secondary {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+}
+.draft-bar button.secondary:hover:not(:disabled) {
+  background: #273549;
+}
+.draft-bar button:not(.secondary) {
+  background: var(--accent);
+  color: #fff;
 }

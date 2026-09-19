@@ -1,7 +1,7 @@
 // Options page logic. Reads/writes config and overrides directly (this is an
 // extension page with the same permissions), and messages the service worker
 // for backfill, reconcile, and status so work continues after the page closes.
-// Folder-policy edits are held in a draft until "Save folder policies" so a
+// Folder-policy edits are held in a draft until "Apply folder policies" so a
 // parent change cannot surprise-apply to children mid-edit.
 // The Folder policies Edge tree is collapsible: depth-0 roots start open;
 // deeper parents start closed (session expand state in treeExpandedIds).
@@ -434,7 +434,7 @@ async function runReconcile(pendingMsg) {
   refreshStatus();
 }
 
-/* ---- folder policy editor (draft until Save) ---- */
+/* ---- folder policy editor (draft until Apply) ---- */
 
 function cloneOverrides(overrides) {
   return structuredClone(overrides ?? {});
@@ -488,15 +488,16 @@ function allRaindropOnlySelected() {
 
 function updatePoliciesUi(statusText) {
   const dirty = policiesDirty();
-  $("savePolicies").disabled = !dirty;
+  $("applyPolicies").disabled = !dirty;
   $("discardPolicies").disabled = !dirty;
   $("selectAllRaindropOnly").disabled = raindropOnlyRows.length === 0 || allRaindropOnlySelected();
   $("clearRaindropOnly").disabled = Object.keys(draftAllowlist).length === 0;
+  $("draftBar").classList.toggle("is-dirty", dirty);
   if (statusText !== undefined) {
     $("policiesStatus").textContent = statusText;
     return;
   }
-  $("policiesStatus").textContent = dirty ? "Unsaved changes" : "";
+  $("policiesStatus").textContent = dirty ? "Unsaved changes" : "No unsaved changes";
 }
 
 function flashPoliciesStatus(text) {
@@ -536,7 +537,7 @@ function selectAllRaindropOnlySelection() {
   paintRaindropOnlyList();
 }
 
-/** Clear draft Raindrop-only allowlist (Save folder policies to persist). */
+/** Clear draft Raindrop-only allowlist (Apply folder policies to persist). */
 function clearRaindropOnlySelection() {
   if (Object.keys(draftAllowlist).length === 0) return;
   draftAllowlist = {};
@@ -1010,13 +1011,13 @@ function paintRaindropOnlyList() {
   updatePoliciesUi();
 }
 
-async function savePolicies() {
+async function applyPolicies() {
   if (!policiesDirty()) return;
   await setOverrides(cloneOverrides(draftOverrides));
   await setRaindropFolderAllowlist(cloneAllowlist(draftAllowlist));
   savedOverrides = cloneOverrides(draftOverrides);
   savedAllowlist = cloneAllowlist(draftAllowlist);
-  flashPoliciesStatus("Saved.");
+  flashPoliciesStatus("Applied.");
 }
 
 async function discardPolicies() {
@@ -1077,7 +1078,7 @@ $("defaultPolicy").addEventListener("change", () => {
     oneWayPolicyMemory = $("defaultPolicy").value;
   }
 });
-$("savePolicies").addEventListener("click", savePolicies);
+$("applyPolicies").addEventListener("click", applyPolicies);
 $("discardPolicies").addEventListener("click", discardPolicies);
 $("expandTree").addEventListener("click", () => {
   expandAllFolders();

@@ -37,7 +37,8 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   (one-way: your “After upload” choice; bidirectional: keep-both). Under
   **Folder policies**, the Edge tree keeps Favorites bar / Other favorites open
   and collapses nested folders by default; use Expand all / Collapse all or the
-  folder filter to reach deeper paths.
+  folder filter to reach deeper paths. Edits stay in a draft until you **Apply
+  folder policies** (sticky bar at the bottom of that tab).
 - **Instant local delete** — under offload / `sync-and-delete`, the bookmark is
   removed from Edge the instant Raindrop confirms the copy (never before). That
   cleanup **does not** delete the Raindrop copy, including in bidirectional mode.
@@ -61,7 +62,7 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   picks land under Other favorites / Raindrop. Drops back into those Edge folders
   upload into the matching account-level Raindrop collection (not under the sync
   root). Use **Select all** to opt in every listed collection, or **Clear
-  selection** then **Save folder policies** to leave selective mode. Allowlist
+  selection** then **Apply folder policies** to leave selective mode. Allowlist
   entries are dropped only when the Raindrop collection is gone — not when
   folders finish mirroring.
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
@@ -103,10 +104,11 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    In bidirectional mode, set **Raindrop → Edge folders** if you want Edge to
    stay folder-source-of-truth (`existing-only`) or to mirror empty Raindrop
    collections (`mirror-all`). Folder policy overrides and the Raindrop-only
-   allowlist are edited as a draft under Folder policies — use **Save folder
-   policies** when you want them to take effect (including child folders via
-   inheritance). Nested Edge folders start collapsed; Expand all / Collapse all
-   and the folder filter help navigate long trees.
+   allowlist are edited as a draft under Folder policies — use **Apply folder
+   policies** on the sticky draft bar when you want them to take effect
+   (including child folders via inheritance). Nested Edge folders start
+   collapsed; Expand all / Collapse all and the folder filter help navigate long
+   trees.
 5. (Optional) On the **Sync** tab, click **Import to Raindrop** to upload existing
    Edge bookmarks. This does not pull anything from Raindrop.
 6. (Bidirectional) On **Sync**, click **Pull now** (or wait about 15 minutes for
