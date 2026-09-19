@@ -139,6 +139,25 @@ export async function remove(id) {
   });
 }
 
+/**
+ * Merge fields onto an existing job (same lock as enqueue/remove).
+ * Used to stash `offloadRaindropId` before a local delete so a restarted
+ * drain can finish the tombstone after the bookmark is already gone.
+ * @param {string} id
+ * @param {Record<string, unknown>} patch
+ * @returns {Promise<boolean>} false if the job is no longer queued
+ */
+export async function patchJob(id, patch) {
+  return withLock(async () => {
+    const jobs = await readQueue();
+    const job = jobs.find((j) => j.id === id);
+    if (!job) return false;
+    Object.assign(job, patch);
+    await writeQueue(jobs);
+    return true;
+  });
+}
+
 // Jobs whose backoff window has elapsed. Folder renames are sorted ahead of
 // other kinds so in-place collection rename wins over title-based path ensure.
 export async function due(now) {

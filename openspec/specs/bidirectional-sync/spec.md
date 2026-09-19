@@ -102,7 +102,7 @@ When sync mode is `bidirectional` and reconcile detects that a mapped raindrop n
 - **AND** the pair mapping is removed
 
 ### Requirement: Policy-driven local cleanup does not delete Raindrop
-When the extension removes an Edge bookmark because of `sync-and-delete` after a confirmed upload, that removal SHALL NOT cause a Raindrop delete, even if sync mode is `bidirectional`. After the Edge remove, the pair mapping SHALL be cleared and a tombstone with reason `edge-offload` SHALL be recorded so reconcile cannot pull the Raindrop copy back into Edge.
+When the extension removes an Edge bookmark because of `sync-and-delete` after a confirmed upload, that removal SHALL NOT cause a Raindrop delete, even if sync mode is `bidirectional`. The `edge-offload` tombstone SHALL be recorded before the Edge bookmark is removed, and the raindrop id SHALL be stored on the upload job before that removal. The pair mapping SHALL be cleared after the Edge remove. If a later drain finds the Edge bookmark already gone and the job carries that raindrop id, the engine SHALL still record the tombstone and clear the pair instead of dropping the job. Reconcile SHALL NOT pull that raindrop back into Edge.
 
 #### Scenario: Sync-and-delete after upload in bidirectional mode
 - **WHEN** bidirectional mode is on and a bookmark's effective policy is `sync-and-delete`
@@ -111,6 +111,11 @@ When the extension removes an Edge bookmark because of `sync-and-delete` after a
 - **AND** no Raindrop delete job is enqueued for that pair
 - **AND** the pair mapping is cleared
 - **AND** an `edge-offload` tombstone blocks Raindrop→Edge re-ingest of that raindrop
+
+#### Scenario: Restart after Edge remove still tombstones
+- **WHEN** an offload job has stored the raindrop id and the Edge bookmark is already gone
+- **THEN** drain records the `edge-offload` tombstone and clears the pair
+- **AND** it does not create another raindrop
 
 ### Requirement: Raindrop-rich metadata is never overwritten from Edge
 Edge→Raindrop writes SHALL only set Edge-owned fields (`link`, `title`, `collection` placement, and optionally `pleaseParse` on create). The system MUST NOT send or clear Raindrop-only fields such as tags, notes, highlights, covers, or excerpts on create or update.

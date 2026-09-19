@@ -42,8 +42,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 - **Instant local delete** — under offload / `sync-and-delete`, the bookmark is
   removed from Edge the instant Raindrop confirms the copy (never before). That
   cleanup **does not** delete the Raindrop copy, including in bidirectional mode.
-  The pair is cleared and an `edge-offload` tombstone is recorded so reconcile
-  cannot pull the item back into Edge.
+  The `edge-offload` tombstone is written **before** the Edge delete, and the
+  raindrop id is stashed on the job, so a worker restart still finishes the
+  tombstone and clears the pair instead of dropping the job. Reconcile cannot
+  pull the item back into Edge.
 - **Bidirectional pull** — when enabled, raindrops under the root appear as Edge
   bookmarks (link/article style items only — uploaded files/documents are skipped);
   deleting on either side removes the pair (with tombstones so items don't
@@ -185,7 +187,8 @@ src/
     store.js               chrome.storage.local (config, pairs, tombstones, status)
     log-archive.js         opt-in IndexedDB long-term activity log
     queue.js               durable typed job queue with backoff
-    mutex.js               in-process lock for storage RMW (queue/pairs/suppress)
+    mutex.js               in-process lock for storage RMW (queue, pairs, log, status)
+    raindrop.js            Raindrop client (create/list/update/delete)
     raindrop.js            Raindrop client (create/list/update/delete)
     collections.js         collection index helpers + nested path mirroring
     bookmarks.js           chrome.bookmarks wrappers + shared mirror path placement
@@ -200,6 +203,7 @@ src/
     reconcile-enqueue.js   pull-create / pull-update enqueue helpers
     reconcile-finish.js    delete-detect, tombstone prune, folder-rename pull
     pull-update.js         shared Raindrop→Edge drift plan
+    pull-now.js            shared Options/popup Pull now loop
     backfill.js            existing-bookmark sweep (run anytime)
   options/                 tabbed UI: Status, Settings, Manual Sync, Folder policies
   popup/                   compact status + quick actions
@@ -229,9 +233,12 @@ scripts/
 - **Deletes in bidirectional mode:** only **user** deletes propagate (including
   every paired bookmark under a deleted folder via `removeInfo.node`). Folder
   **Offload** (`sync-and-delete`) still means “remove from Edge after upload”
-  and leaves Raindrop intact (with all rich metadata), clearing the pair and
-  writing an `edge-offload` tombstone so pull cannot undo it. The options UI
+  and leaves Raindrop intact (with all rich metadata). The tombstone is written
+  before the Edge delete; the pair is cleared after. A restarted job that
+  already stashed the raindrop id finishes that tombstone if the bookmark is
+  gone. The options UI
   does not offer offload as the bidirectional *global* default — that mode
   keeps both sides by default. Stale stored `sync-and-delete` under
-  bidirectional is coerced to keep-both on read/save so the engine matches the UI.
+  bidirectional is coerced to keep-both in memory on every read, and persisted
+  on save or service-worker startup (a read does not write config).
 - **Out of scope for now:** OAuth, and publishing to the Edge Add-ons store.

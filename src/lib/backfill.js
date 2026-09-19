@@ -3,10 +3,12 @@
 //
 // The durable queue IS the resumable cursor: enqueued ids are persisted, so a
 // worker restart mid-backfill resumes from whatever is still queued rather than
-// re-walking and re-uploading. The pair map (hasSynced) guards against re-uploads too.
+// re-walking and re-uploading. The pair map guards against re-uploads too.
+// Load it once — hasSynced re-reads PAIRS under the lock per id, which makes
+// a large import a storage round-trip per bookmark before the first enqueue.
 
 import { POLICY } from "./constants.js";
-import { getConfig, getOverrides, hasSynced, appendLog, setStatus } from "./store.js";
+import { getConfig, getOverrides, getPairs, appendLog, setStatus } from "./store.js";
 import { collectAllBookmarks } from "./bookmarks.js";
 import { resolvePolicy } from "./policy.js";
 import { enqueueMany, size } from "./queue.js";
@@ -14,13 +16,15 @@ import { enqueueMany, size } from "./queue.js";
 export async function startBackfill() {
   const config = await getConfig();
   const overrides = await getOverrides();
+  const pairs = await getPairs();
+  const synced = pairs.byBookmark || {};
   const all = await collectAllBookmarks();
 
   const ids = [];
   for (const { node, ancestorIds } of all) {
     const effective = resolvePolicy(ancestorIds, overrides, config.defaultPolicy);
     if (effective === POLICY.EXCLUDE) continue;
-    if (await hasSynced(node.id)) continue;
+    if (Object.prototype.hasOwnProperty.call(synced, node.id)) continue;
     ids.push(node.id);
   }
 

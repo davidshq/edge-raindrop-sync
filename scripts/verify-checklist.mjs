@@ -490,7 +490,8 @@ async function scenario64_syncAndDelete() {
     "tombstone blocks re-pull after offload"
   );
 
-  // Stale storage heal: raw sync-and-delete under bidirectional is fixed on read
+  // Stale storage: raw sync-and-delete under bidirectional is normalized in
+  // memory on read, and persisted only by healStoredConfig (worker startup).
   await chrome.storage.local.set({
     config: {
       token: "mock",
@@ -500,8 +501,17 @@ async function scenario64_syncAndDelete() {
       pruneEmpty: false,
     },
   });
-  const healed = await eng.store.getConfig();
-  assert.equal(healed.defaultPolicy, POLICY.SYNC_KEEP, "getConfig heals stale offload");
+  const viewed = await eng.store.getConfig();
+  assert.equal(
+    viewed.defaultPolicy,
+    POLICY.SYNC_KEEP,
+    "getConfig normalizes stale offload in memory"
+  );
+  const raw = await chrome.storage.local.get("config");
+  assert.equal(raw.config.defaultPolicy, POLICY.SYNC_DELETE, "getConfig does not write");
+  await eng.store.healStoredConfig();
+  const healed = await chrome.storage.local.get("config");
+  assert.equal(healed.config.defaultPolicy, POLICY.SYNC_KEEP, "startup heal persists keep-both");
 
   console.log("  ✔ Edge gone via folder offload; Raindrop kept; pair cleared + tombstone");
 }
@@ -1990,6 +2000,74 @@ async function optionalLiveSmoke() {
   }
 }
 
+async function scenario74_offloadResumeAndCreateSuppress() {
+  console.log("\n== 7.4 offload resume + create suppression by bookmark id ==");
+  const eng = await importEngine();
+  const { POLICY, SYNC_MODE } = eng.constants;
+  const live = await import("../src/lib/live-handlers.js");
+  await resetAll(eng.store);
+
+  await eng.store.setConfig({
+    token: "mock",
+    rootName: "Edge",
+    syncMode: SYNC_MODE.BIDIRECTIONAL,
+    defaultPolicy: POLICY.SYNC_KEEP,
+  });
+
+  const bm = await chrome.bookmarks.create({
+    parentId: "1",
+    title: "ERS offload resume",
+    url: "https://example.com/ers-offload-resume",
+  });
+  await eng.store.recordSynced(bm.id, "4242");
+  await eng.queue.enqueue(bm.id);
+  assert.equal(await eng.queue.patchJob(bm.id, { offloadRaindropId: "4242" }), true);
+  bookmarks.delete(bm.id);
+
+  await eng.sync.drain();
+
+  assert.equal(await eng.queue.size(), 0, "resumed offload job removed");
+  assert.equal(await eng.store.hasTombstone("4242"), true, "tombstone written after bookmark gone");
+  assert.equal(await eng.store.getRaindropId(bm.id), null, "pair cleared on resume");
+  assert.equal(
+    await eng.store.getBookmarkIdForRaindrop("4242"),
+    null,
+    "reverse pair cleared on resume"
+  );
+
+  await resetAll(eng.store);
+  eng.store.abortExtensionCreate();
+  const url = "https://example.com/ers-same-url";
+  const first = await chrome.bookmarks.create({ parentId: "1", title: "first", url });
+  const second = await chrome.bookmarks.create({ parentId: "1", title: "second", url });
+
+  eng.store.expectExtensionCreate(url);
+  await live.handleBookmarkCreated(first.id, { id: first.id, url: first.url, title: first.title });
+  assert.equal(await eng.queue.size(), 0, "in-flight pull-create does not enqueue");
+  await live.handleBookmarkCreated(second.id, {
+    id: second.id,
+    url: second.url,
+    title: second.title,
+  });
+  assert.equal(await eng.queue.size(), 1, "second bookmark with the same URL is queued");
+
+  await eng.queue.clear();
+  eng.store.noteExtensionCreate(first.id);
+  await live.handleBookmarkCreated(first.id, { id: first.id, url: first.url, title: first.title });
+  assert.equal(await eng.queue.size(), 0, "noted extension id is not queued");
+  eng.store.releaseExtensionCreate(first.id);
+
+  await eng.store.suppressCreate(second.id);
+  await live.handleBookmarkCreated(second.id, {
+    id: second.id,
+    url: second.url,
+    title: second.title,
+  });
+  assert.equal(await eng.queue.size(), 0, "durable suppress is by bookmark id");
+
+  console.log("  ✔ offload resume tombstone; same-URL create still queues");
+}
+
 async function main() {
   console.log(
     `Mode: ${USE_LIVE ? "mock Edge + live Raindrop (ERS-Verify-* only)" : "fully mocked (no real Edge/Raindrop writes)"}`
@@ -2008,6 +2086,7 @@ async function main() {
   await scenario71_tombstonePruneAndPullUpdate();
   await scenario72_deadLetterAndStorage();
   await scenario73_coalesceActivityLog();
+  await scenario74_offloadResumeAndCreateSuppress();
   await optionalLiveSmoke();
 
   console.log("\nAll checklist scenarios passed.");

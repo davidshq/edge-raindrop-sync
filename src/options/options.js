@@ -29,6 +29,7 @@ import {
 } from "../lib/collections.js";
 import { isCollectionAllowed, pruneAllowlist } from "../lib/allowlist.js";
 import { RaindropClient, RateLimitError } from "../lib/raindrop.js";
+import { runPullNow } from "../lib/pull-now.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -402,47 +403,14 @@ async function runReconcile(pendingMsg) {
   const out = $("pullStatus");
   out.textContent = pendingMsg || "Pulling from Raindrop…";
   try {
-    // One click may need several passes (250 raindrops each) before folder
-    // ensure runs; keep going until done so "queued 0 (done=false)" is not
-    // mistaken for a finished no-op.
-    let totalQueued = 0;
-    let passes = 0;
-    const maxPasses = 40;
-    while (passes < maxPasses) {
-      passes++;
-      const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
-      if (!resp?.ok) {
-        out.textContent = `Failed: ${resp?.error}`;
-        break;
-      }
-      if (resp.skipped) {
-        if (resp.reason === "rate_limited") {
-          out.textContent =
-            "Paused for Raindrop rate limits — wait a minute, then try Pull now again.";
-        } else if (resp.reason === "cooldown") {
-          out.textContent = "Pull is on cooldown — wait a bit, or try again later.";
-        } else {
-          out.textContent = "A pull is already running — wait a moment and try again.";
-        }
-        break;
-      }
-      totalQueued += resp.enqueued ?? 0;
-      if (resp.done) {
-        out.textContent =
-          totalQueued > 0
-            ? `Pull finished: queued ${totalQueued} Raindrop change(s).`
-            : "Pull finished. Nothing new to bring into Edge.";
-        break;
-      }
-      if (passes >= maxPasses) {
-        out.textContent = `Pull paused after ${passes} passes (${totalQueued} queued) — click Pull now again to continue.`;
-        break;
-      }
-      out.textContent =
-        `Still scanning Raindrop (pass ${passes})… ${totalQueued} queued so far. ` +
-        `Folder sync starts when the scan finishes.`;
-      await refreshStatus();
-    }
+    const { text } = await runPullNow((msg) => chrome.runtime.sendMessage(msg), {
+      pendingMsg,
+      onProgress: async (text) => {
+        out.textContent = text;
+        await refreshStatus();
+      },
+    });
+    out.textContent = text;
   } catch (err) {
     out.textContent = `Failed: ${err.message}`;
   }

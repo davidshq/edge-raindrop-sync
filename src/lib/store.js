@@ -7,9 +7,11 @@
 // and status/log. Opt-in long-term activity history lives in
 // IndexedDB via log-archive.js (keepLongTermLog), not chrome.storage.local.
 //
-// Pair and suppress mutations share withLock with the queue so concurrent
-// drain / live-capture / reconcile cannot clobber each other's RMW updates.
-// Legacy DEDUP is migrated into PAIRS on first load; pair mutations write PAIRS only.
+// Pair, suppress, log, and status mutations share withLock with the queue so
+// concurrent drain / live-capture / reconcile cannot clobber each other's RMW
+// updates. The lock is in-process only (one service worker); getConfig does
+// not write, so an Options save cannot race a heal. Legacy DEDUP is migrated
+// into PAIRS on first load; pair mutations write PAIRS only.
 // Confirmed deletes/offloads use clearPairWithTombstone (tombstone + forget pair).
 
 import {
@@ -98,9 +100,10 @@ export async function getStorageUsage() {
 
 /* ---- config ---- */
 // getConfig merges DEFAULT_CONFIG so new fields (e.g. raindropFolderMode) appear
-// on older installs without a dedicated migration.
-// Bidirectional always keeps both sides globally; stale sync-and-delete is
-// coerced (and healed in storage) so Options copy and the engine agree.
+// on older installs without a dedicated migration. It does not write.
+// Bidirectional always keeps both sides globally in the returned object; the
+// stored coercion is persisted by healStoredConfig (service-worker start) and
+// by setConfig, never by a read.
 
 /** Force keep-both when bidirectional; folder Offload overrides still work. */
 export function normalizeConfig(config) {
@@ -117,9 +120,18 @@ export function normalizeConfig(config) {
 
 export async function getConfig() {
   const stored = await read(KEY.CONFIG, {});
-  const merged = { ...DEFAULT_CONFIG, ...stored };
-  const config = normalizeConfig(merged);
-  // Heal stale installs that enabled bidirectional before save coerced policy.
+  return normalizeConfig({ ...DEFAULT_CONFIG, ...stored });
+}
+
+/**
+ * Persist bidirectional keep-both if storage still has a stale global offload.
+ * Call from service-worker startup, not from getConfig — a read that writes
+ * can race an Options token save (different JS world, same storage key).
+ * @returns {Promise<object>} normalized config
+ */
+export async function healStoredConfig() {
+  const stored = await read(KEY.CONFIG, {});
+  const config = normalizeConfig({ ...DEFAULT_CONFIG, ...stored });
   if (
     stored.syncMode === SYNC_MODE.BIDIRECTIONAL &&
     stored.defaultPolicy &&
@@ -302,6 +314,57 @@ export async function pruneTombstones(absentRaindropIds) {
 
 /* ---- suppressions for extension-authored create/remove ---- */
 
+/**
+ * URL of one in-flight pull-create. The bookmark id does not exist until
+ * chrome.bookmarks.create returns, and onCreated can fire first. Matching this
+ * URL claims that one event, then clears, so a second bookmark of the same
+ * URL is not treated as an echo. Durable suppression (below) is by bookmark id.
+ */
+let pendingExtensionCreateUrl = null;
+/** Bookmark ids this worker already knows it created. */
+const extensionCreatedIds = new Set();
+
+/** Arm the one-shot URL match immediately before an extension bookmark create. */
+export function expectExtensionCreate(url) {
+  pendingExtensionCreateUrl = url || null;
+}
+
+/** Record the id once create() resolves, and drop the one-shot URL match. */
+export function noteExtensionCreate(bookmarkId) {
+  if (bookmarkId != null && bookmarkId !== "") extensionCreatedIds.add(String(bookmarkId));
+  pendingExtensionCreateUrl = null;
+}
+
+/**
+ * Drop the in-memory id after the durable bookmark-id suppression is stored.
+ * onCreated that has not run yet still matches storage. Leaving the id here
+ * would suppress a later bookmark if the browser reused the id (tests do).
+ */
+export function releaseExtensionCreate(bookmarkId) {
+  if (bookmarkId != null && bookmarkId !== "") extensionCreatedIds.delete(String(bookmarkId));
+}
+
+/** Drop the one-shot match if create() failed before an id existed. */
+export function abortExtensionCreate() {
+  pendingExtensionCreateUrl = null;
+}
+
+/**
+ * True when this onCreated is the extension's pull-create.
+ * Checks the known id first, then at most one pending URL.
+ * @param {string} bookmarkId
+ * @param {string} [url]
+ */
+export function claimExtensionCreate(bookmarkId, url) {
+  const id = bookmarkId != null ? String(bookmarkId) : "";
+  if (id && extensionCreatedIds.delete(id)) return true;
+  if (pendingExtensionCreateUrl && url && url === pendingExtensionCreateUrl) {
+    pendingExtensionCreateUrl = null;
+    return true;
+  }
+  return false;
+}
+
 async function getSuppress() {
   const raw = await read(KEY.SUPPRESS, { removes: {}, creates: {}, changes: {} });
   return {
@@ -360,14 +423,15 @@ export async function consumeRemoveSuppression(bookmarkId) {
   return consumeKey("removes", bookmarkId);
 }
 
-export async function suppressCreate(url) {
-  if (!url) return;
-  return suppressKey("creates", url);
+/** Suppress onCreated for this bookmark id. Not the URL — a second copy of the same link must still sync. */
+export async function suppressCreate(bookmarkId) {
+  if (bookmarkId == null || bookmarkId === "") return;
+  return suppressKey("creates", String(bookmarkId));
 }
 
-export async function consumeCreateSuppression(url) {
-  if (!url) return false;
-  return consumeKey("creates", url);
+export async function consumeCreateSuppression(bookmarkId) {
+  if (bookmarkId == null || bookmarkId === "") return false;
+  return consumeKey("creates", String(bookmarkId));
 }
 
 /** Suppress onMoved/onChanged echo when reconcile applies a Raindrop→Edge update. */
@@ -512,10 +576,14 @@ export async function getStatus() {
   });
 }
 
-export async function setStatus(patch) {
+async function setStatusUnlocked(patch) {
   const next = { ...(await getStatus()), ...patch };
   await write(KEY.STATUS, next);
   return next;
+}
+
+export async function setStatus(patch) {
+  return withLock(() => setStatusUnlocked(patch));
 }
 
 /** True while a global Raindrop rate-limit pause is active. */
@@ -530,18 +598,22 @@ export async function isRateLimited(now = Date.now()) {
  * @returns {Promise<boolean>} true if this call newly entered / extended the window
  */
 export async function noteRateLimitedUntil(until) {
-  const status = await getStatus();
-  const prev = status.rateLimitedUntil ?? 0;
-  if (until <= prev) return false;
-  await setStatus({ rateLimitedUntil: until });
-  return true;
+  return withLock(async () => {
+    const status = await getStatus();
+    const prev = status.rateLimitedUntil ?? 0;
+    if (until <= prev) return false;
+    await setStatusUnlocked({ rateLimitedUntil: until });
+    return true;
+  });
 }
 
 /** Clear the global pause after a successful tick past the window. */
 export async function clearRateLimit() {
-  const status = await getStatus();
-  if (status.rateLimitedUntil == null) return;
-  await setStatus({ rateLimitedUntil: null });
+  return withLock(async () => {
+    const status = await getStatus();
+    if (status.rateLimitedUntil == null) return;
+    await setStatusUnlocked({ rateLimitedUntil: null });
+  });
 }
 
 export async function getLog() {
@@ -569,15 +641,18 @@ export async function appendLog(level, message, at) {
   const now = at ?? Date.now();
   let entry = { at: now, level, message };
   try {
-    const log = await getLog();
-    const coalesced = coalesceLogHead(log[0], level, message, now);
-    if (coalesced) {
-      log[0] = coalesced;
-      entry = coalesced;
-    } else {
-      log.unshift(entry);
-    }
-    await write(KEY.LOG, log.slice(0, LOG_LIMIT));
+    // Lock only the ring-buffer RMW. The archive write stays outside so
+    // IndexedDB cannot block queue/pair updates, and getConfig is outside
+    // so this lock cannot nest.
+    entry = await withLock(async () => {
+      const log = await getLog();
+      const coalesced = coalesceLogHead(log[0], level, message, now);
+      const stored = coalesced ?? entry;
+      if (coalesced) log[0] = coalesced;
+      else log.unshift(entry);
+      await write(KEY.LOG, log.slice(0, LOG_LIMIT));
+      return stored;
+    });
   } catch (err) {
     console.error("[ers] appendLog storage failed:", err);
   }

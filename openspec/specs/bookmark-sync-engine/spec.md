@@ -171,6 +171,8 @@ The engine SHALL persist bidirectional pair mappings (`bookmarkId ↔ raindropId
 #### Scenario: Extension-authored Edge create is suppressed
 - **WHEN** reconcile creates an Edge bookmark from a raindrop
 - **THEN** the resulting `onCreated` event does not enqueue a new Raindrop upload for that bookmark
+- **AND** suppression is for that bookmark id (an in-flight one-shot URL match covers the event that fires before the id is known)
+- **AND** a different bookmark with the same URL is still queued
 
 #### Scenario: Raindrop field drift updates paired Edge bookmark
 - **WHEN** bidirectional mode is on and a paired raindrop's title, link, or collection differs from the Edge bookmark

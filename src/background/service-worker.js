@@ -27,6 +27,7 @@ import {
   getReconcileState,
   getConfig,
   ensurePairsMigrated,
+  healStoredConfig,
   getStorageUsage,
 } from "../lib/store.js";
 
@@ -41,17 +42,22 @@ function logSwError(context, err) {
 }
 
 // Recreate the alarm whenever this worker starts — not only on install/startup.
+// Heal stale bidirectional config here, not inside getConfig: a read that
+// writes can race an Options save and put the old token back.
 ensureHeartbeat();
+void healStoredConfig();
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureHeartbeat();
   void ensurePairsMigrated();
+  void healStoredConfig();
   void appendLog("info", "Extension installed; heartbeat scheduled.");
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureHeartbeat();
   void ensurePairsMigrated();
+  void healStoredConfig();
 });
 
 // Live capture: enqueue new bookmarks (URL nodes only) unless pull-suppressed.

@@ -17,9 +17,14 @@ import {
   forgetSynced,
   forgetPairByRaindrop,
   clearPairWithTombstone,
+  addTombstone,
   hasTombstone,
   suppressRemove,
   suppressCreate,
+  expectExtensionCreate,
+  noteExtensionCreate,
+  abortExtensionCreate,
+  releaseExtensionCreate,
   suppressChange,
   appendLog,
 } from "./store.js";
@@ -99,11 +104,21 @@ async function processUpload(job, ctx) {
   try {
     node = await getNode(job.id);
   } catch {
-    await queue.remove(job.id);
+    // Bookmark already gone: if offload had stashed a raindrop id, finish the
+    // tombstone. Otherwise the upload target disappeared (user delete) and the
+    // job has nothing left to do.
+    await finishInterruptedOffload(job);
     return;
   }
   if (!node.url) {
     await queue.remove(job.id);
+    return;
+  }
+
+  // Restarted offload: raindrop id was persisted before the local delete.
+  // Do not create again — the pair may still point at this bookmark.
+  if (job.offloadRaindropId != null) {
+    await completeOffload(job, node, ctx, String(job.offloadRaindropId));
     return;
   }
 
@@ -164,25 +179,56 @@ async function processUpload(job, ctx) {
       collectionId,
     });
     await recordSynced(job.id, item._id);
+    rid = String(item._id);
     await appendLog("info", `Synced: ${node.title || node.url}`);
   }
 
   if (effective === POLICY.SYNC_DELETE) {
+    const offloadRid = rid || (await getRaindropId(job.id));
+    if (offloadRid) {
+      await completeOffload(job, node, ctx, String(offloadRid));
+      return;
+    }
     const parentId = node.parentId;
-    const offloadRid = await getRaindropId(job.id);
-    // Suppress so onRemoved does not enqueue a Raindrop delete in bidirectional mode.
     await suppressRemove(job.id);
     await removeNode(job.id);
-    // Drop the pair (bookmark id is gone) and tombstone so bidirectional pull
-    // cannot undo the offload. Raindrop copy is intentionally kept.
-    if (offloadRid) {
-      await clearPairWithTombstone(offloadRid, "edge-offload");
-    } else {
-      await forgetSynced(job.id);
-    }
+    await forgetSynced(job.id);
     if (config.pruneEmpty) await pruneIfEmpty(parentId, config, overrides);
   }
 
+  await queue.remove(job.id);
+}
+
+/**
+ * Offload: persist the raindrop id, write the tombstone, then delete Edge.
+ * The pair stays until after the local delete so a retry while the bookmark
+ * still exists updates instead of creating a second raindrop.
+ * @param {object} job
+ * @param {{ parentId?: string }} node
+ * @param {{ config: object, overrides: object }} ctx
+ * @param {string} offloadRid
+ */
+async function completeOffload(job, node, ctx, offloadRid) {
+  const { config, overrides } = ctx;
+  const parentId = node.parentId;
+  await queue.patchJob(job.id, { offloadRaindropId: offloadRid });
+  await addTombstone(offloadRid, "edge-offload");
+  // Suppress so onRemoved does not enqueue a Raindrop delete in bidirectional mode.
+  await suppressRemove(job.id);
+  await removeNode(job.id);
+  await forgetPairByRaindrop(offloadRid);
+  if (config.pruneEmpty) await pruneIfEmpty(parentId, config, overrides);
+  await queue.remove(job.id);
+}
+
+/**
+ * Bookmark missing on retry. Finish an in-progress offload if the job stashed
+ * a raindrop id; otherwise drop the upload.
+ * @param {{ id: string, offloadRaindropId?: string }} job
+ */
+async function finishInterruptedOffload(job) {
+  const rid = job.offloadRaindropId != null ? String(job.offloadRaindropId) : null;
+  if (rid) await clearPairWithTombstone(rid, "edge-offload");
   await queue.remove(job.id);
 }
 
@@ -305,13 +351,23 @@ async function processPullCreate(job, ctx) {
     return;
   }
 
-  await suppressCreate(job.link);
-  const parentId = await resolveEdgeParentForMirror(relative, config.rootName);
-  const node = await createBookmark({
-    parentId,
-    title: job.title || job.link,
-    url: job.link,
-  });
+  expectExtensionCreate(job.link);
+  let node;
+  try {
+    const parentId = await resolveEdgeParentForMirror(relative, config.rootName);
+    node = await createBookmark({
+      parentId,
+      title: job.title || job.link,
+      url: job.link,
+    });
+    // Sync, before any other await, so onCreated that lost the race still sees the id.
+    noteExtensionCreate(node.id);
+  } catch (err) {
+    abortExtensionCreate();
+    throw err;
+  }
+  await suppressCreate(node.id);
+  releaseExtensionCreate(node.id);
   await recordSynced(node.id, rid);
   await appendLog("info", `Pulled: ${job.title || job.link}`);
   await queue.remove(job.id);

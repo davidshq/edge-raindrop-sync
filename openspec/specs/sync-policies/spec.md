@@ -72,7 +72,7 @@ The system SHALL provide a setting controlling whether Edge folders left empty b
 - **THEN** that folder is never removed, even if empty
 
 ### Requirement: Bidirectional mode and sync-and-delete coexistence
-The per-folder policies `sync-and-delete`, `sync-and-keep`, and `exclude` SHALL remain available when sync mode is `bidirectional`. `sync-and-delete` SHALL continue to mean “after confirmed Edge→Raindrop create, remove the Edge bookmark,” and that removal SHALL NOT be treated as a user delete for Raindrop propagation. After Edge removal the pair SHALL be cleared and an `edge-offload` tombstone recorded so bidirectional pull cannot undo the offload.
+The per-folder policies `sync-and-delete`, `sync-and-keep`, and `exclude` SHALL remain available when sync mode is `bidirectional`. `sync-and-delete` SHALL continue to mean “after confirmed Edge→Raindrop create, remove the Edge bookmark,” and that removal SHALL NOT be treated as a user delete for Raindrop propagation. The `edge-offload` tombstone SHALL be recorded before the Edge removal, with the raindrop id stashed on the job first, and the pair SHALL be cleared after the removal so bidirectional pull cannot undo the offload. A drain that finds the bookmark already gone SHALL finish that tombstone when the job carries the raindrop id.
 
 #### Scenario: Sync-and-delete still removes Edge only
 - **WHEN** bidirectional mode is on and a bookmark's effective policy is `sync-and-delete`

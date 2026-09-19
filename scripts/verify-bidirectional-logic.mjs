@@ -28,6 +28,7 @@ import {
   LOG_ARCHIVE_LIMIT,
 } from "../src/lib/constants.js";
 import { normalizeConfig } from "../src/lib/store.js";
+import { runPullNow } from "../src/lib/pull-now.js";
 import {
   isAllowlistActive,
   isCollectionAllowed,
@@ -72,6 +73,24 @@ console.log("== bidirectional coerces global keep-both ==");
   });
   assert.equal(oneWay.defaultPolicy, POLICY.SYNC_DELETE, "one-way offload unchanged");
   console.log("  ✔ stale bidirectional offload → keep-both");
+}
+
+console.log("== pull now loop ==");
+{
+  let calls = 0;
+  const finished = await runPullNow(async () => {
+    calls++;
+    if (calls < 3) return { ok: true, done: false, enqueued: 1 };
+    return { ok: true, done: true, enqueued: 2 };
+  });
+  assert.equal(calls, 3, "keeps scanning until done");
+  assert.equal(finished.totalQueued, 4);
+  assert.match(finished.text, /Pull finished: queued 4/);
+
+  const capped = await runPullNow(async () => ({ ok: true, done: false, enqueued: 0 }));
+  assert.match(capped.text, /Manual Sync/);
+  assert.doesNotMatch(capped.text, /Settings/);
+  console.log("  ✔ popup and options share the pass loop");
 }
 
 console.log("== collection path under root ==");

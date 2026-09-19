@@ -1,6 +1,7 @@
 // Popup: compact status and quick actions. Delegates to the service worker.
 
 import { MSG, SYNC_MODE } from "../lib/constants.js";
+import { runPullNow } from "../lib/pull-now.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -56,25 +57,13 @@ $("reconcile").addEventListener("click", async () => {
   const out = $("pullStatus");
   out.textContent = "Pulling from Raindrop…";
   try {
-    const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
-    if (!resp?.ok) {
-      out.textContent = `Failed: ${resp?.error}`;
-    } else if (resp.skipped) {
-      if (resp.reason === "rate_limited") {
-        out.textContent = "Paused for Raindrop rate limits — try Pull now again shortly.";
-      } else if (resp.reason === "cooldown") {
-        out.textContent = "Pull is on cooldown — try again later.";
-      } else {
-        out.textContent = "A pull is already running — try again shortly.";
-      }
-    } else if (!resp.done) {
-      out.textContent = `Scanning… queued ${resp.enqueued ?? 0}. Open Settings to run the pull to completion.`;
-    } else {
-      out.textContent =
-        (resp.enqueued ?? 0) > 0
-          ? `Pull finished: queued ${resp.enqueued} Raindrop change(s).`
-          : "Pull finished. Nothing new to bring into Edge.";
-    }
+    const { text } = await runPullNow((msg) => chrome.runtime.sendMessage(msg), {
+      pendingMsg: "Pulling from Raindrop…",
+      onProgress: (text) => {
+        out.textContent = text;
+      },
+    });
+    out.textContent = text;
   } catch (err) {
     out.textContent = `Failed: ${err.message}`;
   }

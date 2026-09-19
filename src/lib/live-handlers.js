@@ -10,6 +10,7 @@ import {
   getFolderCollectionId,
   consumeRemoveSuppression,
   consumeCreateSuppression,
+  claimExtensionCreate,
   isChangeSuppressed,
   appendLog,
 } from "./store.js";
@@ -113,7 +114,10 @@ export async function handleBookmarkRemoved(bookmarkId, removeInfo) {
  */
 export async function handleBookmarkCreated(id, node) {
   if (!node?.url) return;
-  if (await consumeCreateSuppression(node.url)) return;
+  // In-memory claim first (sync). Storage key is the bookmark id, not the URL,
+  // so a second copy of the same link is still queued.
+  if (claimExtensionCreate(id, node.url)) return;
+  if (await consumeCreateSuppression(String(id))) return;
   if (await hasSynced(id)) return;
   await queue.enqueue(id);
   await drain();
