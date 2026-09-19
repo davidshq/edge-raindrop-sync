@@ -34,7 +34,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   against the live Raindrop collection list each drain.
 - **Per-folder policy** — override keep / offload (`sync-and-delete`) / `exclude`
   on any folder. Nearest ancestor wins; otherwise the global default applies
-  (one-way: your “After upload” choice; bidirectional: keep-both).
+  (one-way: your “After upload” choice; bidirectional: keep-both). Under
+  **Folder policies**, the Edge tree keeps Favorites bar / Other favorites open
+  and collapses nested folders by default; use Expand all / Collapse all or the
+  folder filter to reach deeper paths.
 - **Instant local delete** — under offload / `sync-and-delete`, the bookmark is
   removed from Edge the instant Raindrop confirms the copy (never before). That
   cleanup **does not** delete the Raindrop copy, including in bidirectional mode.
@@ -102,7 +105,8 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    collections (`mirror-all`). Folder policy overrides and the Raindrop-only
    allowlist are edited as a draft under Folder policies — use **Save folder
    policies** when you want them to take effect (including child folders via
-   inheritance).
+   inheritance). Nested Edge folders start collapsed; Expand all / Collapse all
+   and the folder filter help navigate long trees.
 5. (Optional) On the **Sync** tab, click **Import to Raindrop** to upload existing
    Edge bookmarks. This does not pull anything from Raindrop.
 6. (Bidirectional) On **Sync**, click **Pull now** (or wait about 15 minutes for

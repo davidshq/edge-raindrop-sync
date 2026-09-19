@@ -266,11 +266,24 @@
         <h2 class="visually-hidden">Folder policies</h2>
         <p class="hint">
           Override the default for a folder and everything beneath it (nearest folder wins).
-          Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Overrides
-          survive renames. Edits stay local until you save. Raindrop-only collections are opted in
-          via the section at the bottom (bidirectional only)—not in this Edge tree.
+          Options: Keep in Edge, Offload (delete from Edge after upload), or Exclude. Nested
+          folders start collapsed (Favorites bar / Other favorites stay open). Use Expand all /
+          Collapse all or the filter to find deeper folders. Overrides survive renames. Edits stay
+          local until you save. Raindrop-only collections are opted in via the section at the
+          bottom (bidirectional only)—not in this Edge tree.
         </p>
-        <div id="tree" class="tree"></div>
+        <div class="tree-toolbar">
+          <input
+            id="treeFilter"
+            type="search"
+            placeholder="Filter folders…"
+            aria-label="Filter folders"
+          />
+          <button id="expandTree" type="button" class="secondary">Expand all</button>
+          <button id="collapseTree" type="button" class="secondary">Collapse all</button>
+          <span id="treeMeta" class="hint tree-meta"></span>
+        </div>
+        <div id="tree" class="tree" role="tree" aria-label="Edge folders"></div>
 
         <details id="raindropOnlySection" class="rd-expand hidden">
           <summary>Choose Raindrop-only collections to sync</summary>

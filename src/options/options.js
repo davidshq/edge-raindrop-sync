@@ -3,6 +3,8 @@
 // for backfill, reconcile, and status so work continues after the page closes.
 // Folder-policy edits are held in a draft until "Save folder policies" so a
 // parent change cannot surprise-apply to children mid-edit.
+// The Folder policies Edge tree is collapsible: depth-0 roots start open;
+// deeper parents start closed (session expand state in treeExpandedIds).
 // Top tabs (Status / Settings / Sync / Folder policies) show one panel at a time.
 
 import { ALL_POLICIES, MSG, POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE } from "../lib/constants.js";
@@ -541,6 +543,169 @@ function clearRaindropOnlySelection() {
   paintRaindropOnlyList();
 }
 
+/** Last Edge bookmark tree used to paint Folder policies (for discard re-paint). */
+let cachedFolderTree = null;
+/**
+ * Expanded folder ids for the Edge policy tree.
+ * `null` means apply the default rule: depth-0 roots open, deeper parents closed.
+ * @type {Set<string>|null}
+ */
+let treeExpandedIds = null;
+/** Folder-count under the last painted tree (folders only). */
+let treeFolderTotal = 0;
+
+/**
+ * Direct child folders of a bookmark node (skips URL bookmarks).
+ * @param {{ children?: Array<{ url?: string }> }} node
+ */
+function folderChildren(node) {
+  return (node.children ?? []).filter((c) => !c.url);
+}
+
+/**
+ * Count of folder nodes beneath `node` (not including `node` itself).
+ * @param {{ children?: Array<{ url?: string, children?: unknown[] }> }} node
+ */
+function countDescendantFolders(node) {
+  let n = 0;
+  for (const child of folderChildren(node)) {
+    n += 1 + countDescendantFolders(child);
+  }
+  return n;
+}
+
+/** Default open state: only top-level Edge roots (Favorites bar / Other favorites). */
+function defaultExpanded(depth) {
+  return depth === 0;
+}
+
+/**
+ * Whether a parent folder should be expanded given session state.
+ * @param {string} folderId
+ * @param {number} depth
+ */
+function isFolderExpanded(folderId, depth) {
+  if (treeExpandedIds === null) return defaultExpanded(depth);
+  return treeExpandedIds.has(String(folderId));
+}
+
+/** Ensure `treeExpandedIds` is a Set seeded from the current default/DOM rule. */
+function ensureExpandedSet() {
+  if (treeExpandedIds !== null) return;
+  treeExpandedIds = new Set();
+  document.querySelectorAll("#tree .tree-node").forEach((el) => {
+    const twist = el.querySelector(":scope > .tree-row > .tree-twist");
+    if (twist && twist.getAttribute("aria-expanded") === "true") {
+      treeExpandedIds.add(el.dataset.id);
+    }
+  });
+}
+
+/**
+ * Apply expanded/collapsed UI for one tree node.
+ * @param {HTMLElement} nodeEl
+ * @param {boolean} open
+ */
+function setNodeExpanded(nodeEl, open) {
+  const twist = nodeEl.querySelector(":scope > .tree-row > .tree-twist");
+  const childrenEl = nodeEl.querySelector(":scope > .tree-children");
+  if (!twist || !childrenEl || twist.disabled) return;
+  twist.setAttribute("aria-expanded", open ? "true" : "false");
+  twist.textContent = open ? "▾" : "▸";
+  childrenEl.hidden = !open;
+}
+
+function expandAllFolders() {
+  ensureExpandedSet();
+  document.querySelectorAll("#tree .tree-node").forEach((el) => {
+    if (!el.querySelector(":scope > .tree-children")) return;
+    treeExpandedIds.add(el.dataset.id);
+    setNodeExpanded(el, true);
+  });
+  updateTreeMeta();
+}
+
+function collapseFoldersToDefault() {
+  treeExpandedIds = new Set();
+  document.querySelectorAll("#tree .tree-node").forEach((el) => {
+    if (!el.querySelector(":scope > .tree-children")) return;
+    const depth = Number(el.dataset.depth);
+    const open = defaultExpanded(depth);
+    if (open) treeExpandedIds.add(el.dataset.id);
+    setNodeExpanded(el, open);
+  });
+  updateTreeMeta();
+}
+
+/**
+ * Filter the painted tree by title/path. Empty query restores default expansion.
+ * @param {string} query
+ */
+function applyTreeFilter(query) {
+  const q = query.trim().toLowerCase();
+  const nodes = [...document.querySelectorAll("#tree .tree-node")];
+
+  if (!q) {
+    nodes.forEach((n) => {
+      n.hidden = false;
+    });
+    treeExpandedIds = null;
+    nodes.forEach((n) => {
+      if (!n.querySelector(":scope > .tree-children")) return;
+      setNodeExpanded(n, defaultExpanded(Number(n.dataset.depth)));
+    });
+    updateTreeMeta();
+    return;
+  }
+
+  ensureExpandedSet();
+  const matches = new Set();
+  for (const n of nodes) {
+    const title = n.dataset.title || "";
+    const path = n.dataset.path || "";
+    if (title.includes(q) || path.includes(q)) {
+      matches.add(n);
+      let el = n.parentElement;
+      while (el) {
+        if (el.classList?.contains("tree-node")) matches.add(el);
+        el = el.parentElement;
+      }
+    }
+  }
+
+  for (const n of nodes) {
+    n.hidden = !matches.has(n);
+    if (matches.has(n) && n.querySelector(":scope > .tree-children")) {
+      treeExpandedIds.add(n.dataset.id);
+      setNodeExpanded(n, true);
+    }
+  }
+  updateTreeMeta();
+}
+
+function countVisibleTreeRows() {
+  return [...document.querySelectorAll("#tree .tree-node")].filter((n) => {
+    if (n.hidden) return false;
+    let el = n.parentElement;
+    while (el && el.id !== "tree") {
+      if (el.classList?.contains("tree-children") && el.hidden) return false;
+      if (el.classList?.contains("tree-node") && el.hidden) return false;
+      el = el.parentElement;
+    }
+    return true;
+  }).length;
+}
+
+function updateTreeMeta() {
+  const meta = $("treeMeta");
+  if (!meta) return;
+  if (treeFolderTotal === 0) {
+    meta.textContent = "";
+    return;
+  }
+  meta.textContent = `${countVisibleTreeRows()} shown · ${treeFolderTotal} folders`;
+}
+
 async function renderTree() {
   const [overrides, allowlist, tree] = await Promise.all([
     getOverrides(),
@@ -551,6 +716,7 @@ async function renderTree() {
   draftOverrides = cloneOverrides(overrides);
   savedAllowlist = cloneAllowlist(allowlist);
   draftAllowlist = cloneAllowlist(allowlist);
+  treeExpandedIds = null;
   paintTree(tree);
   updatePoliciesUi();
   const config = await getConfig();
@@ -562,54 +728,140 @@ async function renderTree() {
 function paintTree(tree) {
   const container = $("tree");
   container.innerHTML = "";
+  cachedFolderTree = tree;
 
-  const rows = [];
-  const walk = (node, depth, pathSegments) => {
-    for (const child of node.children ?? []) {
-      if (child.url) continue;
-      const path = [...pathSegments, child.title];
-      rows.push(buildRow(child, depth, path));
-      walk(child, depth + 1, path);
+  const roots = [];
+  for (const root of tree) {
+    for (const child of folderChildren(root)) {
+      roots.push(child);
     }
-  };
-  for (const root of tree) walk(root, 0, []);
+  }
 
-  if (rows.length === 0) {
+  treeFolderTotal = 0;
+  for (const folder of roots) {
+    treeFolderTotal += 1 + countDescendantFolders(folder);
+  }
+
+  if (roots.length === 0) {
     container.textContent = "No folders found.";
+    updateTreeMeta();
     return;
   }
-  rows.forEach((r) => container.append(r));
+
+  for (const folder of roots) {
+    container.append(buildTreeNode(folder, 0, []));
+  }
+
+  const filter = $("treeFilter");
+  if (filter?.value.trim()) {
+    applyTreeFilter(filter.value);
+  } else {
+    updateTreeMeta();
+  }
 }
 
-function buildRow(folder, depth, path) {
+/**
+ * Build one collapsible folder node (row + optional children group).
+ * @param {{ id: string, title?: string, children?: unknown[] }} folder
+ * @param {number} depth
+ * @param {string[]} pathSegments
+ */
+function buildTreeNode(folder, depth, pathSegments) {
+  const path = [...pathSegments, folder.title || "(untitled)"];
+  const kids = folderChildren(folder);
+  const hasKids = kids.length > 0;
+  const descendantCount = countDescendantFolders(folder);
+  const pathText = path.join(" / ");
+
+  const nodeEl = document.createElement("div");
+  nodeEl.className = "tree-node";
+  nodeEl.dataset.id = String(folder.id);
+  nodeEl.dataset.depth = String(depth);
+  nodeEl.dataset.title = (folder.title || "").toLowerCase();
+  nodeEl.dataset.path = pathText.toLowerCase();
+
   const row = document.createElement("div");
   row.className = "tree-row";
+  row.setAttribute("role", "treeitem");
+  row.style.paddingLeft = `${10 + depth * 16}px`;
   const current = draftOverrides[folder.id]?.policy;
   if (current) row.classList.add("has-override");
 
+  const twist = document.createElement("button");
+  twist.type = "button";
+  twist.className = "tree-twist";
+  twist.tabIndex = hasKids ? 0 : -1;
+  twist.disabled = !hasKids;
+  const titleLabel = folder.title || "(untitled)";
+  twist.setAttribute("aria-label", `Toggle ${titleLabel}`);
+  const expanded = hasKids && isFolderExpanded(folder.id, depth);
+  if (hasKids) {
+    twist.setAttribute("aria-expanded", expanded ? "true" : "false");
+    twist.textContent = expanded ? "▾" : "▸";
+  } else {
+    twist.textContent = "·";
+  }
+
   const name = document.createElement("div");
   name.className = "name";
-  name.style.paddingLeft = `${depth * 18}px`;
-  const title = document.createElement("div");
-  title.textContent = folder.title || "(untitled)";
+  const titleRow = document.createElement("div");
+  titleRow.className = "folder-title";
+  const title = document.createElement("span");
+  title.textContent = titleLabel;
+  titleRow.append(title);
+
+  if (hasKids && descendantCount > 0) {
+    const chip = document.createElement("span");
+    chip.className = "child-count";
+    chip.textContent =
+      descendantCount === kids.length
+        ? String(kids.length)
+        : `${kids.length} · ${descendantCount} nested`;
+    chip.title = `${kids.length} direct · ${descendantCount} folders beneath`;
+    titleRow.append(chip);
+  }
+
   const sub = document.createElement("div");
   sub.className = "path";
-  sub.textContent = path.join(" / ");
-  name.append(title, sub);
+  sub.textContent = pathText;
+  name.append(titleRow, sub);
 
   const select = document.createElement("select");
+  select.setAttribute("aria-label", `Policy for ${titleLabel}`);
   const inherit = new Option("Inherit", "inherit", !current, !current);
   select.append(inherit);
   for (const p of ALL_POLICIES) {
     select.append(new Option(POLICY_LABELS[p], p, current === p, current === p));
   }
   select.addEventListener("change", () => {
-    applyDraftChange(folder.id, select.value, path.join(" / "));
+    applyDraftChange(folder.id, select.value, pathText);
     row.classList.toggle("has-override", select.value !== "inherit");
   });
 
-  row.append(name, select);
-  return row;
+  row.append(twist, name, select);
+  nodeEl.append(row);
+
+  if (hasKids) {
+    const childrenEl = document.createElement("div");
+    childrenEl.className = "tree-children";
+    childrenEl.setAttribute("role", "group");
+    if (!expanded) childrenEl.hidden = true;
+    for (const child of kids) {
+      childrenEl.append(buildTreeNode(child, depth + 1, path));
+    }
+    nodeEl.append(childrenEl);
+
+    twist.addEventListener("click", () => {
+      ensureExpandedSet();
+      const open = twist.getAttribute("aria-expanded") !== "true";
+      if (open) treeExpandedIds.add(String(folder.id));
+      else treeExpandedIds.delete(String(folder.id));
+      setNodeExpanded(nodeEl, open);
+      updateTreeMeta();
+    });
+  }
+
+  return nodeEl;
 }
 
 async function refreshRaindropOnlyList() {
@@ -771,7 +1023,7 @@ async function discardPolicies() {
   if (!policiesDirty()) return;
   draftOverrides = cloneOverrides(savedOverrides);
   draftAllowlist = cloneAllowlist(savedAllowlist);
-  const tree = await getTree();
+  const tree = cachedFolderTree ?? (await getTree());
   paintTree(tree);
   paintRaindropOnlyList();
 }
@@ -827,6 +1079,21 @@ $("defaultPolicy").addEventListener("change", () => {
 });
 $("savePolicies").addEventListener("click", savePolicies);
 $("discardPolicies").addEventListener("click", discardPolicies);
+$("expandTree").addEventListener("click", () => {
+  expandAllFolders();
+});
+$("collapseTree").addEventListener("click", () => {
+  const filter = $("treeFilter");
+  if (filter?.value.trim()) {
+    collapseFoldersToDefault();
+    applyTreeFilter(filter.value);
+  } else {
+    collapseFoldersToDefault();
+  }
+});
+$("treeFilter").addEventListener("input", (event) => {
+  applyTreeFilter(event.target.value);
+});
 $("refreshRaindropOnly").addEventListener("click", () => {
   refreshRaindropOnlyList();
 });
