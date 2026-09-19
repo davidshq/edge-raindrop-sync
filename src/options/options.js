@@ -5,7 +5,7 @@
 // parent change cannot surprise-apply to children mid-edit.
 // The Folder policies Edge tree is collapsible: depth-0 roots start open;
 // deeper parents start closed (session expand state in treeExpandedIds).
-// Top tabs (Status / Settings / Sync / Folder policies) show one panel at a time.
+// Top tabs (Status / Settings / Manual Sync / Folder policies) show one panel at a time.
 
 import { ALL_POLICIES, MSG, POLICY, SYNC_MODE, RAINDROP_FOLDER_MODE } from "../lib/constants.js";
 import {
@@ -264,6 +264,9 @@ async function refreshStatus() {
 
   const last = resp.status?.lastActivityAt;
   $("lastActivity").textContent = last ? new Date(last).toLocaleString() : "—";
+
+  const pushAt = resp.status?.lastPushAt;
+  $("lastPush").textContent = pushAt ? new Date(pushAt).toLocaleString() : "—";
 
   const rec = resp.reconcile?.lastRunAt;
   $("lastReconcile").textContent = rec ? new Date(rec).toLocaleString() : "—";

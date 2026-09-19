@@ -44,7 +44,7 @@
           data-tab="sync"
           tabindex="-1"
         >
-          Sync
+          Manual Sync
         </button>
         <button
           type="button"
@@ -214,7 +214,7 @@
         </div>
       </section>
 
-      <!-- Sync: manual Import (Edge → Raindrop) and Pull (Raindrop → Edge) -->
+      <!-- Manual Sync: Import (Edge → Raindrop) and Pull (Raindrop → Edge) -->
       <section
         id="panel-sync"
         class="tab-panel hidden"
@@ -223,13 +223,20 @@
         data-panel="sync"
         hidden
       >
-        <h2 class="visually-hidden">Sync</h2>
+        <h2 class="visually-hidden">Manual Sync</h2>
+        <!--
+          Four direct children per card (title, help, meta, button row) so
+          .manual-actions can align both columns with CSS subgrid rows.
+        -->
         <div class="manual-actions">
           <div class="manual-action">
             <p class="action-title">Sync to Raindrop</p>
             <p class="hint action-help">
-              One-time. Uploads bookmarks already in Edge that are not synced yet, and skips
-              folders set to Exclude. Does not pull from Raindrop.
+              Uploads bookmarks already in Edge that are not synced yet, and skips folders set to
+              Exclude. Run anytime. Does not pull from Raindrop.
+            </p>
+            <p class="status-line muted">
+              Last push: <span id="lastPush">—</span>
             </p>
             <div class="row">
               <button id="backfill" type="button">Import to Raindrop</button>
@@ -247,7 +254,7 @@
               Last pull: <span id="lastReconcile">—</span>
             </p>
             <div class="row">
-              <button id="reconcile" type="button" class="secondary">Pull now</button>
+              <button id="reconcile" type="button">Pull now</button>
               <span id="pullStatus" class="hint"></span>
             </div>
           </div>

@@ -505,6 +505,8 @@ export async function getStatus() {
     lastError: null,
     deletionsHalted: false,
     lastActivityAt: null,
+    /** @type {number|null} epoch ms — last Import to Raindrop (backfill) run */
+    lastPushAt: null,
     /** @type {number|null} epoch ms — skip Raindrop API work until then */
     rateLimitedUntil: null,
   });

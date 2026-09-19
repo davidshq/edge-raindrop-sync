@@ -1,5 +1,5 @@
-// One-shot backfill: enqueue every existing bookmark whose resolved policy is
-// not `exclude` and which has not already been synced.
+// Backfill: enqueue every existing bookmark whose resolved policy is not
+// `exclude` and which has not already been synced. Safe to run anytime.
 //
 // The durable queue IS the resumable cursor: enqueued ids are persisted, so a
 // worker restart mid-backfill resumes from whatever is still queued rather than
@@ -26,6 +26,6 @@ export async function startBackfill() {
 
   const added = await enqueueMany(ids);
   await appendLog("info", `Import queued ${added} bookmark(s) (${all.length} scanned).`);
-  await setStatus({ pending: await size() });
+  await setStatus({ pending: await size(), lastPushAt: Date.now() });
   return { scanned: all.length, queued: added };
 }

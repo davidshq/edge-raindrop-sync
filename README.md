@@ -68,7 +68,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
   Raindrop tags, notes, highlights, covers, and excerpts are never overwritten
   from Edge.
-- **Import to Raindrop** — a one-shot sweep uploads Edge bookmarks that already exist and are not synced yet. It does not pull from Raindrop. In Options and the popup this control is labeled **Import to Raindrop**.
+- **Import to Raindrop** — a sweep (run anytime) uploads Edge bookmarks that
+  already exist and are not synced yet. It does not pull from Raindrop. In
+  Options (**Manual Sync**) and the popup this control is labeled **Import to
+  Raindrop**.
 - **Crash-safe** — a durable queue plus a bidirectional pair map mean offline
   periods, rate limits, and the ephemeral service worker can never lose a
   bookmark or double-upload one. Queue/pair/suppress writes are serialized in
@@ -98,7 +101,7 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    - Go to `edge://extensions`
    - Enable **Developer mode**
    - **Load unpacked** → select the `src/` folder
-4. Open the extension's **Options**. Tabs: **Status** · **Settings** · **Sync** ·
+4. Open the extension's **Options**. Tabs: **Status** · **Settings** · **Manual Sync** ·
    **Folder policies**. On Settings, paste your token, click **Test**, set the
    root collection name / sync mode / default policy, then **Save settings**.
    In bidirectional mode, set **Raindrop → Edge folders** if you want Edge to
@@ -109,10 +112,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    (including child folders via inheritance). Nested Edge folders start
    collapsed; Expand all / Collapse all and the folder filter help navigate long
    trees.
-5. (Optional) On the **Sync** tab, click **Import to Raindrop** to upload existing
-   Edge bookmarks. This does not pull anything from Raindrop.
-6. (Bidirectional) On **Sync**, click **Pull now** (or wait about 15 minutes for
-   the heartbeat) to bring Raindrop items into Edge. This does not upload Edge
+5. (Optional) On the **Manual Sync** tab, click **Import to Raindrop** to upload
+   existing Edge bookmarks (run anytime). This does not pull anything from Raindrop.
+6. (Bidirectional) On **Manual Sync**, click **Pull now** (or wait about 15 minutes
+   for the heartbeat) to bring Raindrop items into Edge. This does not upload Edge
    bookmarks.
 
 ## Tests
@@ -197,8 +200,8 @@ src/
     reconcile-enqueue.js   pull-create / pull-update enqueue helpers
     reconcile-finish.js    delete-detect, tombstone prune, folder-rename pull
     pull-update.js         shared Raindrop→Edge drift plan
-    backfill.js            one-shot existing-bookmark sweep
-  options/                 tabbed UI: Status, Settings, Sync, Folder policies
+    backfill.js            existing-bookmark sweep (run anytime)
+  options/                 tabbed UI: Status, Settings, Manual Sync, Folder policies
   popup/                   compact status + quick actions
 scripts/
   verify-bidirectional-logic.mjs  pure helper checks (imports src/lib)

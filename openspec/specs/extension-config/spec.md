@@ -2,21 +2,21 @@
 
 ## Purpose
 
-Provide the configuration and status surfaces of the extension via a tabbed options page (Status, Settings, Sync, Folder policies): Raindrop credentials, root collection naming, sync mode (one-way or bidirectional), global and per-folder policy settings, pruning, the import and pull triggers, and a sync status/log display.
+Provide the configuration and status surfaces of the extension via a tabbed options page (Status, Settings, Manual Sync, Folder policies): Raindrop credentials, root collection naming, sync mode (one-way or bidirectional), global and per-folder policy settings, pruning, the import and pull triggers, and a sync status/log display.
 
 ## Requirements
 
 ### Requirement: Options page tabs
-The options UI SHALL present four top-level tabs and SHALL show only the selected tab’s panel at a time: **Status** (pending queue, dead-lettered count and controls, last activity, local storage usage, recent activity, long-term archive export/clear), **Settings** (token, root name, sync mode and mode-dependent defaults, prune, long-term log toggle, save settings), **Sync** (Import to Raindrop / sync-to-Raindrop action, and Pull from Raindrop when bidirectional), and **Folder policies** (Edge tree overrides draft and Raindrop-only allowlist). The Status tab SHALL be the default when Options opens with no hash. Hash fragments `#settings`, `#sync`, and `#folders` SHALL open the matching tab.
+The options UI SHALL present four top-level tabs and SHALL show only the selected tab’s panel at a time: **Status** (pending queue, dead-lettered count and controls, last activity, local storage usage, recent activity, long-term archive export/clear), **Settings** (token, root name, sync mode and mode-dependent defaults, prune, long-term log toggle, save settings), **Manual Sync** (Import to Raindrop / sync-to-Raindrop action, and Pull from Raindrop when bidirectional), and **Folder policies** (Edge tree overrides draft and Raindrop-only allowlist). The Status tab SHALL be the default when Options opens with no hash. Hash fragments `#settings`, `#sync`, and `#folders` SHALL open the matching tab.
 
 #### Scenario: Switch to Settings
 - **WHEN** the user activates the Settings tab
 - **THEN** only the Settings panel is visible
-- **AND** Status, Sync, and Folder policies panels are hidden
+- **AND** Status, Manual Sync, and Folder policies panels are hidden
 
-#### Scenario: Open Sync via hash
+#### Scenario: Open Manual Sync via hash
 - **WHEN** the options page loads with `#sync`
-- **THEN** the Sync tab is selected and its panel is shown
+- **THEN** the Manual Sync tab is selected and its panel is shown
 
 ### Requirement: Raindrop test-token configuration
 The extension SHALL provide a configuration field to enter and store a Raindrop personal test token in `chrome.storage`, and SHALL use it as the bearer credential for Raindrop API requests. The token SHALL NOT be displayed in plain text once saved beyond what is needed to confirm it is set.
@@ -126,11 +126,15 @@ The extension SHALL expose a toggle controlling whether empty Edge folders are p
 - **THEN** subsequent deletions that empty a folder cause that folder to be removed
 
 ### Requirement: Backfill trigger
-The extension SHALL provide an "Import to Raindrop" control that starts the one-shot backfill sweep of existing bookmarks. The control's help text SHALL state that this uploads existing unsynced Edge bookmarks and does not pull from Raindrop. Progress for this control SHALL be shown separately from the pull control.
+The extension SHALL provide an "Import to Raindrop" control that starts a backfill sweep of existing unsynced bookmarks. The control MAY be run at any time. The control's help text SHALL state that this uploads existing unsynced Edge bookmarks, may be run anytime, and does not pull from Raindrop. Progress for this control SHALL be shown separately from the pull control. The Manual Sync panel SHALL show a "Last push" timestamp updated when the Import sweep finishes enqueueing (not when queued uploads later drain), parallel to "Last pull" for reconcile.
 
 #### Scenario: User triggers backfill
 - **WHEN** the user clicks "Import to Raindrop"
 - **THEN** the backfill sweep begins enqueuing existing bookmarks per their resolved policies
+
+#### Scenario: Last push timestamp after import enqueue
+- **WHEN** Import to Raindrop finishes enqueueing
+- **THEN** the Manual Sync panel's "Last push" timestamp reflects that run
 
 ### Requirement: Sync status and log display
 The extension SHALL display sync status, including pending queue size, dead-lettered job count (with Retry / Clear when non-empty), approximate `chrome.storage.local` usage, recent sync activity (up to 500 entries retained in local storage), and any errors such as authentication failures, storage write failures, or rate-limit backoff. The status view SHALL offer controls for an opt-in long-term activity archive (enable with settings, export, clear) as specified by the activity-log-archive capability.

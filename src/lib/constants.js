@@ -75,7 +75,7 @@ export const KEY = {
   COLLECTION_CACHE: "collectionCache", // { [collectionPath]: collectionId }
   /** Edge folder id → Raindrop collection id (for in-place folder renames). */
   FOLDER_COLLECTIONS: "folderCollections", // { [folderId]: collectionId }
-  STATUS: "status", // { pending, lastError, deletionsHalted, lastActivityAt, rateLimitedUntil }
+  STATUS: "status", // { pending, lastError, deletionsHalted, lastActivityAt, lastPushAt, rateLimitedUntil }
   LOG: "log", // [ { at, level, message } ] recent ring buffer (LOG_LIMIT)
 };
 
