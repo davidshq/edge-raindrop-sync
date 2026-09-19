@@ -68,7 +68,7 @@
         data-panel="status"
       >
         <h2 class="visually-hidden">Status</h2>
-        <div id="haltBanner" class="banner hidden"></div>
+        <div id="haltBanner" class="banner hidden" role="alert"></div>
         <p class="status-line">
           Pending in queue: <strong id="pending">0</strong> · Dead-lettered:
           <strong id="deadLetter">0</strong> · Last activity:
@@ -78,11 +78,11 @@
         <div id="deadLetterRow" class="row hidden">
           <button id="retryDeadLetter" type="button" class="secondary">Retry dead-lettered</button>
           <button id="clearDeadLetter" type="button" class="secondary">Clear dead-lettered</button>
-          <span id="deadLetterStatus" class="hint"></span>
+          <span id="deadLetterStatus" class="hint" role="status"></span>
         </div>
         <h3>Recent activity</h3>
         <p class="hint">Newest 500 lines in local storage (older recent lines drop off).</p>
-        <ul id="log" class="log"></ul>
+        <ul id="log" class="log" tabindex="0" aria-label="Recent activity"></ul>
         <h3>Long-term archive</h3>
         <p class="hint">
           Archived entries: <strong id="archiveCount">0</strong>
@@ -91,7 +91,7 @@
         <div class="row">
           <button id="exportArchive" type="button" class="secondary">Export archive</button>
           <button id="clearArchive" type="button" class="secondary">Clear archive</button>
-          <span id="archiveStatus" class="hint"></span>
+          <span id="archiveStatus" class="hint" role="status"></span>
         </div>
       </section>
 
@@ -105,19 +105,21 @@
         hidden
       >
         <h2 class="visually-hidden">Settings</h2>
-        <label>
-          Raindrop test token
-          <input id="token" type="password" autocomplete="off" placeholder="paste token" />
-          <button id="testToken" type="button" class="secondary">Test</button>
-          <span id="tokenStatus" class="hint"></span>
-        </label>
+        <div class="token-field">
+          <label for="token">Raindrop test token</label>
+          <div class="token-row">
+            <input id="token" type="password" autocomplete="off" placeholder="paste token" />
+            <button id="testToken" type="button" class="secondary">Test</button>
+            <span id="tokenStatus" class="hint" role="status"></span>
+          </div>
+        </div>
         <label>
           Root collection name
           <input id="rootName" type="text" placeholder="Edge" />
         </label>
         <label>
           Sync mode
-          <select id="syncMode">
+          <select id="syncMode" aria-describedby="oneWayModeHelp">
             <option value="one-way">One-way (Edge → Raindrop)</option>
             <option value="bidirectional">Bidirectional Sync</option>
           </select>
@@ -141,13 +143,13 @@
         <div id="oneWayPolicyBlock">
           <label>
             After upload
-            <select id="defaultPolicy">
+            <select id="defaultPolicy" aria-describedby="defaultPolicyHelp">
               <option value="sync-and-delete">Delete from Edge (offload)</option>
               <option value="sync-and-keep">Keep in Edge</option>
               <option value="exclude">Exclude (don't sync)</option>
             </select>
           </label>
-          <ul class="policy-help hint">
+          <ul id="defaultPolicyHelp" class="policy-help hint">
             <li>
               <strong>Delete from Edge</strong> — After a confirmed upload, remove the Edge
               bookmark. Raindrop keeps the copy. This is the default for one-way offload.
@@ -172,7 +174,7 @@
           </p>
           <label>
             Raindrop → Edge folders
-            <select id="raindropFolderMode">
+            <select id="raindropFolderMode" aria-describedby="folderModeHelpExisting">
               <option value="existing-only">Existing Edge folders only</option>
               <option value="create-as-needed">Create folders as needed</option>
               <option value="mirror-all">Mirror all collections (incl. empty)</option>
@@ -210,7 +212,7 @@
         </p>
         <div class="row">
           <button id="save" type="button">Save settings</button>
-          <span id="saveStatus" class="hint"></span>
+          <span id="saveStatus" class="hint" role="status"></span>
         </div>
       </section>
 
@@ -240,7 +242,7 @@
             </p>
             <div class="row">
               <button id="backfill" type="button">Import to Raindrop</button>
-              <span id="importStatus" class="hint"></span>
+              <span id="importStatus" class="hint" role="status"></span>
             </div>
           </div>
           <div id="pullAction" class="manual-action hidden">
@@ -255,7 +257,7 @@
             </p>
             <div class="row">
               <button id="reconcile" type="button">Pull now</button>
-              <span id="pullStatus" class="hint"></span>
+              <span id="pullStatus" class="hint" role="status"></span>
             </div>
           </div>
         </div>
@@ -290,7 +292,7 @@
           <button id="collapseTree" type="button" class="secondary">Collapse all</button>
           <span id="treeMeta" class="hint tree-meta"></span>
         </div>
-        <div id="tree" class="tree" role="tree" aria-label="Edge folders"></div>
+        <div id="tree" class="tree" role="group" aria-label="Edge folders"></div>
 
         <details id="raindropOnlySection" class="rd-expand hidden">
           <summary>Choose Raindrop-only collections to sync</summary>
@@ -313,14 +315,14 @@
               <button id="clearRaindropOnly" type="button" class="secondary" disabled>
                 Clear selection
               </button>
-              <span id="raindropOnlyStatus" class="hint"></span>
+              <span id="raindropOnlyStatus" class="hint" role="status"></span>
             </div>
             <div id="raindropOnlyList" class="rd-list"></div>
           </div>
         </details>
 
         <div class="draft-bar" id="draftBar" role="region" aria-label="Folder policy draft">
-          <span id="policiesStatus" class="draft-status">No unsaved changes</span>
+          <span id="policiesStatus" class="draft-status" role="status">No unsaved changes</span>
           <div class="draft-actions">
             <button id="discardPolicies" type="button" class="secondary" disabled>Discard</button>
             <button id="applyPolicies" type="button" disabled>Apply folder policies</button>

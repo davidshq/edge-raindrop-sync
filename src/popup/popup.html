@@ -7,7 +7,7 @@
   </head>
   <body>
     <h1 id="title">Edge → Raindrop</h1>
-    <div id="halt" class="banner hidden"></div>
+    <div id="halt" class="banner hidden" role="alert"></div>
     <p class="status">
       Pending: <strong id="pending">0</strong><br />
       <span id="lastActivity" class="muted">—</span><br />
@@ -19,7 +19,7 @@
           One-time upload of bookmarks already in Edge. Does not pull from Raindrop.
         </p>
         <button id="backfill" type="button">Import to Raindrop</button>
-        <p id="importStatus" class="muted action-status"></p>
+        <p id="importStatus" class="muted action-status" role="status"></p>
       </div>
       <div id="pullAction" class="action hidden">
         <p class="action-copy">
@@ -27,7 +27,7 @@
           existing Edge bookmarks.
         </p>
         <button id="reconcile" type="button" class="secondary">Pull now</button>
-        <p id="pullStatus" class="muted action-status"></p>
+        <p id="pullStatus" class="muted action-status" role="status"></p>
       </div>
       <button id="options" type="button" class="secondary">Settings</button>
     </div>

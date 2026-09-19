@@ -1,3 +1,11 @@
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
   width: 260px;
   margin: 0;
@@ -5,7 +13,7 @@ body {
   font:
     13px/1.5 system-ui,
     -apple-system,
-    Segoe UI,
+    "Segoe UI",
     Roboto,
     sans-serif;
   color: #1b1f24;
@@ -38,7 +46,7 @@ h1 {
 button {
   width: 100%;
   padding: 8px 10px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: #2563eb;
   color: #fff;
@@ -49,6 +57,7 @@ button {
 button.secondary {
   background: #eef1f5;
   color: #1b1f24;
+  border-color: #e3e6ea;
 }
 .banner {
   background: #fef2f2;

@@ -27,12 +27,13 @@ async function refresh() {
   const halt = $("halt");
   const rateUntil = resp.status?.rateLimitedUntil;
   if (rateUntil && rateUntil > Date.now()) {
+    halt.classList.remove("hidden");
     halt.textContent = `Rate limited until ${new Date(rateUntil).toLocaleTimeString()}`;
-    halt.classList.remove("hidden");
   } else if (resp.status?.deletionsHalted && resp.status?.lastError) {
-    halt.textContent = resp.status.lastError;
     halt.classList.remove("hidden");
+    halt.textContent = resp.status.lastError;
   } else {
+    halt.textContent = "";
     halt.classList.add("hidden");
   }
 }

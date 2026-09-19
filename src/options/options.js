@@ -3,7 +3,8 @@
 // for backfill, reconcile, and status so work continues after the page closes.
 // Folder-policy edits are held in a draft until "Apply folder policies" so a
 // parent change cannot surprise-apply to children mid-edit.
-// The Folder policies Edge tree is collapsible: depth-0 roots start open;
+// The Folder policies list is a collapsible disclosure tree, not an ARIA tree:
+// each parent twist is a button with aria-expanded. Depth-0 roots start open;
 // deeper parents start closed (session expand state in treeExpandedIds).
 // Top tabs (Status / Settings / Manual Sync / Folder policies) show one panel at a time.
 
@@ -123,6 +124,9 @@ let oneWayPolicyMemory = POLICY.SYNC_DELETE;
  * Bidirectional implies keep-both globally. One-way shows the after-upload
  * policy control. Folder overrides may still offload or exclude subtrees.
  * Raindrop→Edge folders select is bidirectional-only.
+ *
+ * aria-describedby names only the visible help. A hidden node still counts
+ * if it is referenced, so do not point at both mode paragraphs at once.
  */
 function updateSyncModeUi(mode) {
   const bi = mode === SYNC_MODE.BIDIRECTIONAL;
@@ -132,6 +136,10 @@ function updateSyncModeUi(mode) {
   $("oneWayPolicyBlock").classList.toggle("hidden", bi);
   $("bidirectionalPolicyBlock").classList.toggle("hidden", !bi);
   $("pullAction").classList.toggle("hidden", !bi);
+  $("syncMode").setAttribute(
+    "aria-describedby",
+    bi ? "bidirectionalModeHelp" : "oneWayModeHelp",
+  );
 
   if (bi) {
     $("defaultPolicy").value = POLICY.SYNC_KEEP;
@@ -148,6 +156,13 @@ function updateFolderModeHelp(mode) {
   $("folderModeHelpExisting").classList.toggle("hidden", m !== RAINDROP_FOLDER_MODE.EXISTING_ONLY);
   $("folderModeHelpCreate").classList.toggle("hidden", m !== RAINDROP_FOLDER_MODE.CREATE_AS_NEEDED);
   $("folderModeHelpMirror").classList.toggle("hidden", m !== RAINDROP_FOLDER_MODE.MIRROR_ALL);
+  const helpId =
+    m === RAINDROP_FOLDER_MODE.EXISTING_ONLY
+      ? "folderModeHelpExisting"
+      : m === RAINDROP_FOLDER_MODE.MIRROR_ALL
+        ? "folderModeHelpMirror"
+        : "folderModeHelpCreate";
+  $("raindropFolderMode").setAttribute("aria-describedby", helpId);
 }
 
 function effectiveDefaultPolicy(syncMode) {
@@ -277,15 +292,16 @@ async function refreshStatus() {
   const banner = $("haltBanner");
   const rateUntil = resp.status?.rateLimitedUntil;
   if (rateUntil && rateUntil > Date.now()) {
+    banner.classList.remove("hidden");
     banner.textContent = `Paused for Raindrop rate limits until ${new Date(rateUntil).toLocaleTimeString()}. Sync resumes automatically.`;
-    banner.classList.remove("hidden");
   } else if (resp.status?.lastError?.startsWith("Storage write failed")) {
+    banner.classList.remove("hidden");
     banner.textContent = resp.status.lastError;
-    banner.classList.remove("hidden");
   } else if (resp.status?.deletionsHalted && resp.status?.lastError) {
-    banner.textContent = `Deletions halted: ${resp.status.lastError}. Jobs are kept and will retry once resolved.`;
     banner.classList.remove("hidden");
+    banner.textContent = `Deletions halted: ${resp.status.lastError}. Jobs are kept and will retry once resolved.`;
   } else {
+    banner.textContent = "";
     banner.classList.add("hidden");
   }
 
@@ -297,7 +313,7 @@ async function refreshStatus() {
     ts.className = "ts";
     ts.textContent = new Date(entry.at).toLocaleTimeString();
     const msg = document.createElement("span");
-    msg.className = `lvl-${entry.level}`;
+    msg.className = `msg lvl-${entry.level}`;
     msg.textContent = entry.message;
     li.append(ts, msg);
     const repeats = Array.isArray(entry.ats) ? entry.ats.length : 0;
@@ -765,7 +781,10 @@ function paintTree(tree) {
 }
 
 /**
- * Build one collapsible folder node (row + optional children group).
+ * Build one collapsible folder node (row + optional children).
+ * Parent twists are disclosure buttons (aria-expanded + aria-controls), not
+ * treeitems. An ARIA tree would need arrow-key navigation and the children
+ * group owned by the item, which fights the policy select in each row.
  * @param {{ id: string, title?: string, children?: unknown[] }} folder
  * @param {number} depth
  * @param {string[]} pathSegments
@@ -786,7 +805,6 @@ function buildTreeNode(folder, depth, pathSegments) {
 
   const row = document.createElement("div");
   row.className = "tree-row";
-  row.setAttribute("role", "treeitem");
   row.style.paddingLeft = `${10 + depth * 16}px`;
   const current = draftOverrides[folder.id]?.policy;
   if (current) row.classList.add("has-override");
@@ -794,15 +812,20 @@ function buildTreeNode(folder, depth, pathSegments) {
   const twist = document.createElement("button");
   twist.type = "button";
   twist.className = "tree-twist";
-  twist.tabIndex = hasKids ? 0 : -1;
-  twist.disabled = !hasKids;
   const titleLabel = folder.title || "(untitled)";
-  twist.setAttribute("aria-label", `Toggle ${titleLabel}`);
   const expanded = hasKids && isFolderExpanded(folder.id, depth);
+  const childrenId = `tree-children-${folder.id}`;
   if (hasKids) {
+    twist.tabIndex = 0;
+    twist.setAttribute("aria-label", `Toggle ${titleLabel}`);
     twist.setAttribute("aria-expanded", expanded ? "true" : "false");
+    twist.setAttribute("aria-controls", childrenId);
     twist.textContent = expanded ? "▾" : "▸";
   } else {
+    // Spacer so leaf titles line up with parents. Not a control.
+    twist.disabled = true;
+    twist.tabIndex = -1;
+    twist.setAttribute("aria-hidden", "true");
     twist.textContent = "·";
   }
 
@@ -848,7 +871,7 @@ function buildTreeNode(folder, depth, pathSegments) {
   if (hasKids) {
     const childrenEl = document.createElement("div");
     childrenEl.className = "tree-children";
-    childrenEl.setAttribute("role", "group");
+    childrenEl.id = childrenId;
     if (!expanded) childrenEl.hidden = true;
     for (const child of kids) {
       childrenEl.append(buildTreeNode(child, depth + 1, path));
@@ -987,6 +1010,7 @@ function paintRaindropOnlyList() {
       isCollectionAllowed(row.id, index, rootId, draftAllowlist) &&
       !draftAllowlist[row.id];
 
+    const label = document.createElement("label");
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = !!draftAllowlist[row.id] || coveredByParent;
@@ -1003,12 +1027,13 @@ function paintRaindropOnlyList() {
     sub.className = "sub";
     sub.textContent = coveredByParent ? `${row.path} · included via parent` : row.path;
     meta.append(title, sub);
+    label.append(cb, meta);
 
     const badge = document.createElement("span");
     badge.className = `rd-badge ${row.empty ? "empty" : "only"}`;
     badge.textContent = row.empty ? "empty" : "Raindrop only";
 
-    el.append(cb, meta, badge);
+    el.append(label, badge);
     container.append(el);
   }
   updatePoliciesUi();
