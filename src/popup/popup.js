@@ -20,8 +20,9 @@ async function refresh() {
     : "No syncs yet";
 
   const bi = resp.syncMode === SYNC_MODE.BIDIRECTIONAL;
+  $("title").textContent = bi ? "Edge ↔ Raindrop" : "Edge → Raindrop";
   $("modeLine").textContent = bi ? "Mode: bidirectional" : "Mode: one-way";
-  $("reconcile").classList.toggle("hidden", !bi);
+  $("pullAction").classList.toggle("hidden", !bi);
 
   const halt = $("halt");
   const rateUntil = resp.status?.rateLimitedUntil;
@@ -37,41 +38,45 @@ async function refresh() {
 }
 
 $("backfill").addEventListener("click", async () => {
-  $("msg").textContent = "Queuing backfill…";
+  const out = $("importStatus");
+  out.textContent = "Queuing Edge bookmarks…";
   try {
     const resp = await chrome.runtime.sendMessage({ type: MSG.RUN_BACKFILL });
-    $("msg").textContent = resp?.ok ? `Queued ${resp.queued}.` : `Failed: ${resp?.error}`;
+    out.textContent = resp?.ok
+      ? `Queued ${resp.queued} Edge bookmark(s).`
+      : `Failed: ${resp?.error}`;
   } catch (err) {
-    $("msg").textContent = `Failed: ${err.message}`;
+    out.textContent = `Failed: ${err.message}`;
   }
   refresh();
 });
 
 $("reconcile").addEventListener("click", async () => {
-  $("msg").textContent = "Reconciling…";
+  const out = $("pullStatus");
+  out.textContent = "Pulling from Raindrop…";
   try {
     const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
     if (!resp?.ok) {
-      $("msg").textContent = `Failed: ${resp?.error}`;
+      out.textContent = `Failed: ${resp?.error}`;
     } else if (resp.skipped) {
       if (resp.reason === "rate_limited") {
-        $("msg").textContent = "Paused for Raindrop rate limits — try again shortly.";
+        out.textContent = "Paused for Raindrop rate limits — try Pull now again shortly.";
       } else if (resp.reason === "cooldown") {
-        $("msg").textContent = "Reconcile on cooldown — try again later.";
+        out.textContent = "Pull is on cooldown — try again later.";
       } else {
-        $("msg").textContent = "Already running — try again shortly.";
+        out.textContent = "A pull is already running — try again shortly.";
       }
     } else if (!resp.done) {
-      $("msg").textContent =
-        `Scanning… queued ${resp.enqueued ?? 0} (more pages; open Options to run to completion).`;
+      out.textContent =
+        `Scanning… queued ${resp.enqueued ?? 0}. Open Settings to run the pull to completion.`;
     } else {
-      $("msg").textContent =
+      out.textContent =
         (resp.enqueued ?? 0) > 0
-          ? `Finished: queued ${resp.enqueued} pull(s).`
-          : "Finished (no new pulls).";
+          ? `Pull finished: queued ${resp.enqueued} Raindrop change(s).`
+          : "Pull finished. Nothing new to bring into Edge.";
     }
   } catch (err) {
-    $("msg").textContent = `Failed: ${err.message}`;
+    out.textContent = `Failed: ${err.message}`;
   }
   refresh();
 });

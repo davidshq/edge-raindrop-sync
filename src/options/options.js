@@ -63,8 +63,7 @@ function updateSyncModeUi(mode) {
   $("bidirectionalWarn").classList.toggle("hidden", !bi);
   $("oneWayPolicyBlock").classList.toggle("hidden", bi);
   $("bidirectionalPolicyBlock").classList.toggle("hidden", !bi);
-  $("reconcile").classList.toggle("hidden", !bi);
-  $("reconcileLine").classList.toggle("hidden", !bi);
+  $("pullAction").classList.toggle("hidden", !bi);
 
   if (bi) {
     $("defaultPolicy").value = POLICY.SYNC_KEEP;
@@ -138,7 +137,7 @@ async function saveSettings() {
 
   // First switch into bidirectional: kick an immediate reconcile.
   if (syncMode === SYNC_MODE.BIDIRECTIONAL && previous.syncMode !== SYNC_MODE.BIDIRECTIONAL) {
-    runReconcile("Starting initial reconcile…");
+    runReconcile("Starting the first pull from Raindrop…");
   }
 }
 
@@ -302,20 +301,22 @@ async function clearArchiveConfirmed() {
 }
 
 async function runBackfill() {
-  $("backfillStatus").textContent = "Queuing…";
+  const out = $("importStatus");
+  out.textContent = "Queuing Edge bookmarks…";
   try {
     const resp = await chrome.runtime.sendMessage({ type: MSG.RUN_BACKFILL });
-    $("backfillStatus").textContent = resp?.ok
+    out.textContent = resp?.ok
       ? `Queued ${resp.queued} of ${resp.scanned} scanned.`
       : `Failed: ${resp?.error}`;
   } catch (err) {
-    $("backfillStatus").textContent = `Failed: ${err.message}`;
+    out.textContent = `Failed: ${err.message}`;
   }
   refreshStatus();
 }
 
 async function runReconcile(pendingMsg) {
-  $("backfillStatus").textContent = pendingMsg || "Reconciling…";
+  const out = $("pullStatus");
+  out.textContent = pendingMsg || "Pulling from Raindrop…";
   try {
     // One click may need several passes (250 raindrops each) before folder
     // ensure runs; keep going until done so "queued 0 (done=false)" is not
@@ -327,42 +328,40 @@ async function runReconcile(pendingMsg) {
       passes++;
       const resp = await chrome.runtime.sendMessage({ type: MSG.RECONCILE_NOW });
       if (!resp?.ok) {
-        $("backfillStatus").textContent = `Failed: ${resp?.error}`;
+        out.textContent = `Failed: ${resp?.error}`;
         break;
       }
       if (resp.skipped) {
         if (resp.reason === "rate_limited") {
-          $("backfillStatus").textContent =
-            "Paused for Raindrop rate limits — wait a minute, then try Reconcile again.";
+          out.textContent =
+            "Paused for Raindrop rate limits — wait a minute, then try Pull now again.";
         } else if (resp.reason === "cooldown") {
-          $("backfillStatus").textContent =
-            "Reconcile on cooldown — wait a bit, or try again later.";
+          out.textContent = "Pull is on cooldown — wait a bit, or try again later.";
         } else {
-          $("backfillStatus").textContent =
-            "Reconcile already running — wait a moment and try again.";
+          out.textContent = "A pull is already running — wait a moment and try again.";
         }
         break;
       }
       totalQueued += resp.enqueued ?? 0;
       if (resp.done) {
-        $("backfillStatus").textContent =
+        out.textContent =
           totalQueued > 0
-            ? `Reconcile finished: queued ${totalQueued} pull(s).`
-            : "Reconcile finished (no new pulls).";
+            ? `Pull finished: queued ${totalQueued} Raindrop change(s).`
+            : "Pull finished. Nothing new to bring into Edge.";
         break;
       }
       if (passes >= maxPasses) {
-        $("backfillStatus").textContent =
-          `Reconcile paused after ${passes} passes (${totalQueued} queued) — click Reconcile again to continue.`;
+        out.textContent =
+          `Pull paused after ${passes} passes (${totalQueued} queued) — click Pull now again to continue.`;
         break;
       }
-      $("backfillStatus").textContent =
-        `Still scanning Raindrop (pass ${passes})… ${totalQueued} pull(s) queued so far. ` +
-        `Folder sync starts when the scan completes.`;
+      out.textContent =
+        `Still scanning Raindrop (pass ${passes})… ${totalQueued} queued so far. ` +
+        `Folder sync starts when the scan finishes.`;
       await refreshStatus();
     }
   } catch (err) {
-    $("backfillStatus").textContent = `Failed: ${err.message}`;
+    out.textContent = `Failed: ${err.message}`;
   }
   refreshStatus();
 }

@@ -53,7 +53,7 @@ export async function finishReconcileCycle({
     seenAcc: null,
   });
   if (enqueued > 0) {
-    await appendLog("info", `Reconcile queued ${enqueued} pull(s).`);
+    await appendLog("info", `Pull queued ${enqueued} Raindrop change(s).`);
   }
   return { enqueued, pages, done: true };
 }
@@ -145,7 +145,7 @@ async function finishDeleteDetection(client, seenIds, pairs, maxGets) {
   });
 
   if (deleteJobs > 0) {
-    await appendLog("info", `Reconcile queued ${deleteJobs} Edge delete(s) for missing raindrops.`);
+    await appendLog("info", `Pull queued ${deleteJobs} Edge delete(s) for missing raindrops.`);
   }
   if (maxGets > 0) {
     const deferred = candidates.length - checked;
@@ -231,7 +231,7 @@ async function finishFolderRenamePull(index, config, overrides) {
   }
 
   if (enqueued > 0) {
-    await appendLog("info", `Reconcile queued ${enqueued} Edge folder rename(s) from Raindrop.`);
+    await appendLog("info", `Pull queued ${enqueued} Edge folder rename(s) from Raindrop.`);
   }
 }
 

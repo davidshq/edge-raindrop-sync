@@ -2,12 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Edge → Raindrop Sync — Options</title>
+    <title>Edge ↔ Raindrop Sync — Options</title>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
     <main>
-      <h1>Edge → Raindrop Sync</h1>
+      <h1>Edge ↔ Raindrop Sync</h1>
       <p class="lede">
         Sync Edge bookmarks with Raindrop.io, mirroring your folder shape. Choose how traffic flows;
         one-way mode also asks what to do with the Edge copy after upload.
@@ -132,13 +132,33 @@
           <span id="lastActivity">—</span>
         </p>
         <p class="status-line muted">Local storage: <span id="storageUsage">—</span></p>
-        <p id="reconcileLine" class="status-line muted hidden">
-          Last reconcile: <span id="lastReconcile">—</span>
-        </p>
-        <div class="row">
-          <button id="backfill" type="button">Run backfill now</button>
-          <button id="reconcile" type="button" class="secondary hidden">Reconcile now</button>
-          <span id="backfillStatus" class="hint"></span>
+        <div class="manual-actions">
+          <div class="manual-action">
+            <p class="action-title">Import existing Edge bookmarks</p>
+            <p class="hint action-help">
+              One-time. Uploads bookmarks already in Edge that are not synced yet, and skips
+              folders set to Exclude. Does not pull from Raindrop.
+            </p>
+            <div class="row">
+              <button id="backfill" type="button">Import to Raindrop</button>
+              <span id="importStatus" class="hint"></span>
+            </div>
+          </div>
+          <div id="pullAction" class="manual-action hidden">
+            <p class="action-title">Pull from Raindrop</p>
+            <p class="hint action-help">
+              Brings new and changed Raindrop bookmarks into Edge, and removes Edge bookmarks
+              whose Raindrop copy is gone. Also runs about every 15 minutes. Does not upload
+              your existing Edge bookmarks.
+            </p>
+            <p id="reconcileLine" class="status-line muted">
+              Last pull: <span id="lastReconcile">—</span>
+            </p>
+            <div class="row">
+              <button id="reconcile" type="button" class="secondary">Pull now</button>
+              <span id="pullStatus" class="hint"></span>
+            </div>
+          </div>
         </div>
         <div id="deadLetterRow" class="row hidden">
           <button id="retryDeadLetter" type="button" class="secondary">Retry dead-lettered</button>

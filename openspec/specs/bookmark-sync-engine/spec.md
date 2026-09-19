@@ -80,7 +80,7 @@ The engine SHALL maintain a persisted `bookmarkId → raindropId` map and SHALL 
 The extension SHALL provide a user-triggered backfill that walks the existing bookmark tree, enqueues each URL node per its resolved policy, and drains with rate-limit backoff. Backfill progress SHALL be persisted so the sweep resumes after a worker restart rather than restarting.
 
 #### Scenario: User runs backfill
-- **WHEN** the user triggers "Run backfill now"
+- **WHEN** the user triggers "Import to Raindrop"
 - **THEN** every existing bookmark whose resolved policy is not `exclude` is enqueued for syncing
 
 #### Scenario: Rate limit encountered during backfill
@@ -99,7 +99,7 @@ The extension SHALL provide a user-triggered backfill that walks the existing bo
 - **AND** the heartbeat fires again within the configured reconcile cooldown
 - **AND** no in-progress cursor remains
 - **THEN** the engine skips starting a new Raindrop listing pass
-- **AND** a user-triggered "Reconcile now" still runs immediately
+- **AND** a user-triggered "Pull now" still runs immediately
 
 #### Scenario: Delete-confirm GETs are capped per tick
 - **WHEN** reconcile finishes a listing pass with many paired raindrops absent from the listing
@@ -113,7 +113,7 @@ The extension SHALL provide a user-triggered backfill that walks the existing bo
 - **AND** the Options/popup UI surfaces a matching message instead of always saying "already running"
 
 #### Scenario: Manual reconcile applies the global rate-limit gate
-- **WHEN** a user-triggered "Reconcile now" hits HTTP 429 or a proactive rate-budget pause
+- **WHEN** a user-triggered "Pull now" hits HTTP 429 or a proactive rate-budget pause
 - **THEN** the engine sets the same global Raindrop pause used by the heartbeat
 - **AND** defers due queue jobs until that pause ends
 - **AND** returns a `rate_limited` skip result to the Options/popup UI

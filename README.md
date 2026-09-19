@@ -64,7 +64,7 @@ Edge no longer syncs bookmarks) are reachable everywhere.
 - **Metadata ownership** — Edge only writes URL, title, and collection placement.
   Raindrop tags, notes, highlights, covers, and excerpts are never overwritten
   from Edge.
-- **Backfill** — a one-shot sweep imports your existing Edge bookmarks.
+- **Import to Raindrop** — a one-shot sweep uploads Edge bookmarks that already exist and are not synced yet. It does not pull from Raindrop. In Options and the popup this control is labeled **Import to Raindrop**.
 - **Crash-safe** — a durable queue plus a bidirectional pair map mean offline
   periods, rate limits, and the ephemeral service worker can never lose a
   bookmark or double-upload one. Queue/pair/suppress writes are serialized in
@@ -73,7 +73,7 @@ Edge no longer syncs bookmarks) are reachable everywhere.
   runs low, with per-tick caps on list pages, queue jobs, and delete-confirm
   GETs so a large library cannot stampede the API. The 1-minute heartbeat still
   drains the queue; full bidirectional reconcile cools down for 15 minutes after
-  a completed cycle (manual **Reconcile now** always runs).
+  a completed cycle (manual **Pull now** always runs).
 - **Activity log** — Options → Status shows the newest **500** lines from
   `chrome.storage.local`. Consecutive identical lines collapse into one row
   (latest time, a `×N` count, and up to 100 occurrence times kept on the entry).
@@ -101,9 +101,10 @@ Edge no longer syncs bookmarks) are reachable everywhere.
    collections (`mirror-all`). Folder policy overrides and the Raindrop-only
    allowlist are edited as a draft — use **Save folder policies** when you want
    them to take effect (including child folders via inheritance).
-5. (Optional) Click **Run backfill now** to import existing Edge bookmarks.
-6. (Bidirectional) Click **Reconcile now** (or wait for the heartbeat) to pull
-   Raindrop items into Edge.
+5. (Optional) Click **Import to Raindrop** to upload existing Edge bookmarks.
+   This does not pull anything from Raindrop.
+6. (Bidirectional) Click **Pull now** (or wait about 15 minutes for the heartbeat)
+   to bring Raindrop items into Edge. This does not upload Edge bookmarks.
 
 ## Tests
 

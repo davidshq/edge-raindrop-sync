@@ -25,7 +25,7 @@ export async function startBackfill() {
   }
 
   const added = await enqueueMany(ids);
-  await appendLog("info", `Backfill queued ${added} bookmark(s) (${all.length} scanned).`);
+  await appendLog("info", `Import queued ${added} bookmark(s) (${all.length} scanned).`);
   await setStatus({ pending: await size() });
   return { scanned: all.length, queued: added };
 }

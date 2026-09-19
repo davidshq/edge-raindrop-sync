@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Provide the configuration and status surfaces of the extension: Raindrop credentials, root collection naming, sync mode (one-way or bidirectional), global and per-folder policy settings, pruning, the backfill and reconcile triggers, and a sync status/log display.
+Provide the configuration and status surfaces of the extension: Raindrop credentials, root collection naming, sync mode (one-way or bidirectional), global and per-folder policy settings, pruning, the import and pull triggers, and a sync status/log display.
 
 ## Requirements
 
@@ -76,10 +76,10 @@ The extension SHALL expose a toggle controlling whether empty Edge folders are p
 - **THEN** subsequent deletions that empty a folder cause that folder to be removed
 
 ### Requirement: Backfill trigger
-The extension SHALL provide a "Run backfill now" control that starts the one-shot backfill sweep of existing bookmarks.
+The extension SHALL provide an "Import to Raindrop" control that starts the one-shot backfill sweep of existing bookmarks. The control's help text SHALL state that this uploads existing unsynced Edge bookmarks and does not pull from Raindrop. Progress for this control SHALL be shown separately from the pull control.
 
 #### Scenario: User triggers backfill
-- **WHEN** the user clicks "Run backfill now"
+- **WHEN** the user clicks "Import to Raindrop"
 - **THEN** the backfill sweep begins enqueuing existing bookmarks per their resolved policies
 
 ### Requirement: Sync status and log display
@@ -144,11 +144,15 @@ When bidirectional mode is selected, the options UI SHALL present a short warnin
 - **THEN** the status or log view reflects that activity
 
 ### Requirement: Manual reconcile control
-The extension SHALL provide a control to trigger an immediate Raindrop reconcile when bidirectional mode is enabled.
+When bidirectional mode is enabled, the extension SHALL provide a "Pull now" control that triggers an immediate Raindrop reconcile. The control SHALL be hidden in one-way mode. Its help text SHALL state that this brings Raindrop changes into Edge, can remove Edge bookmarks whose Raindrop copy is gone, and does not upload existing Edge bookmarks. Progress for this control SHALL be shown separately from the import control.
 
 #### Scenario: User runs reconcile
-- **WHEN** sync mode is `bidirectional` and the user triggers reconcile
+- **WHEN** sync mode is `bidirectional` and the user triggers "Pull now"
 - **THEN** a reconcile pass is scheduled/started for the configured root tree
+
+#### Scenario: Pull control hidden in one-way
+- **WHEN** sync mode is `one-way`
+- **THEN** the options UI does not show the pull control
 
 ### Requirement: Raindrop-to-Edge folders configuration
 The extension SHALL let the user choose Raindrop→Edge folder mode from `existing-only`, `create-as-needed`, and `mirror-all` when sync mode is `bidirectional`, defaulting to `create-as-needed`, and SHALL persist the choice in extension storage with the rest of settings. When sync mode is `one-way`, the options UI SHALL NOT present this control.

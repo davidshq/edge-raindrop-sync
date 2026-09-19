@@ -105,7 +105,7 @@ export const ALARM_NAME = "ers-heartbeat";
 export const HEARTBEAT_MINUTES = 1;
 /**
  * Minimum gap between *completed* bidirectional reconcile cycles on the
- * heartbeat. In-progress cursors always continue; manual "Reconcile now"
+ * heartbeat. In-progress cursors always continue; manual "Pull now"
  * bypasses this. Keeps idle installs from re-listing Raindrop every minute.
  */
 export const MIN_RECONCILE_INTERVAL_MS = 15 * 60 * 1000;

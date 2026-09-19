@@ -22,11 +22,21 @@ h1 {
 }
 .actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
+}
+.action-copy {
+  margin: 0 0 6px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.action-status {
+  margin: 6px 0 0;
+  min-height: 1em;
+  font-size: 12px;
 }
 button {
-  flex: 1 1 40%;
+  width: 100%;
   padding: 8px 10px;
   border: none;
   border-radius: 8px;
@@ -51,8 +61,4 @@ button.secondary {
 }
 .hidden {
   display: none;
-}
-#msg {
-  margin: 10px 0 0;
-  min-height: 1em;
 }

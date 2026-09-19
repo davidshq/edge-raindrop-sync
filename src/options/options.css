@@ -154,6 +154,46 @@ button:active:not(:disabled) {
   margin: 4px 0 12px;
 }
 
+.manual-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 4px 0 16px;
+}
+.manual-actions:has(.manual-action.hidden) {
+  grid-template-columns: 1fr;
+}
+.manual-action {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px 14px;
+  background: var(--bg);
+}
+.manual-action .action-title {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.manual-action .action-help {
+  margin: 0 0 10px;
+}
+.manual-action .status-line {
+  margin: 0 0 8px;
+}
+.manual-action .row {
+  margin-top: 0;
+  flex-wrap: wrap;
+}
+.manual-action .row .hint {
+  flex: 1 1 12rem;
+}
+
+@media (max-width: 640px) {
+  .manual-actions {
+    grid-template-columns: 1fr;
+  }
+}
+
 .banner {
   background: var(--warn-bg);
   color: var(--warn-ink);

@@ -24,7 +24,7 @@ export {
 } from "./live-handlers.js";
 
 /**
- * Options/popup "Reconcile now": force past idle cooldown, then drain.
+ * Options/popup "Pull now": force past idle cooldown, then drain.
  * Rate-limit / auth errors use the same global gate as the heartbeat so a
  * manual 429 cannot leave rateLimitedUntil unset while the alarm keeps firing.
  */
@@ -44,7 +44,7 @@ export async function reconcileNow() {
       }
       throw err;
     }
-    await appendLog("error", `Reconcile failed: ${err.message}`);
+    await appendLog("error", `Pull failed: ${err.message}`);
     throw err;
   }
 }
@@ -70,6 +70,6 @@ export async function tick() {
     if (!(await isRateLimited())) await clearRateLimit();
   } catch (err) {
     if (await handleClientError(err)) return;
-    await appendLog("error", `Reconcile failed: ${err.message}`);
+    await appendLog("error", `Pull failed: ${err.message}`);
   }
 }
